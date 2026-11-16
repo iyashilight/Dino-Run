@@ -474,8 +474,8 @@
     game.herd.phase = 'active';
     // variable speed each time, mostly slow
     game.herd.speed = pickHerdSpeed();
-    game.herd.width = rnd(1100, 1700);
-    game.herd.height = 260;
+    game.herd.width = rnd(1300, 2000);
+    game.herd.height = 320;
     game.herd.x = game.cameraX + W + 120;
     game.herd.timer = 0;
     // randomize members with overlapping positions
@@ -483,9 +483,9 @@
     game.herd.members = [];
     for (let i = 0; i < count; i++) {
       game.herd.members.push({
-        ox: rnd(0, game.herd.width - 180),
-        oy: rnd(0, 10),
-        scale: rnd(3.0, 5.2),
+        ox: rnd(0, game.herd.width - 220),
+        oy: rnd(0, 8),
+        scale: rnd(4.0, 6.5),
         shade: ['#666', '#707070', '#787878', '#5f5f5f'][Math.floor(rnd(0, 4))],
         legPhase: Math.random() < 0.5 ? 0 : 1
       });
