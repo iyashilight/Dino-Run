@@ -56,6 +56,15 @@
     border-bottom-width: 3px; border-radius: 5px; color: #888;
     font-size: 11px; margin: 0 1px;
   }
+  .touch-controls { margin-top: 10px; }
+  .touch-row { display: flex; gap: 10px; justify-content: center; }
+  .touch-btn {
+    font-family: inherit; font-size: 15px; font-weight: bold; color: #666;
+    background: #fff; border: 2px solid #e2e2e2; border-radius: 10px;
+    padding: 12px 18px; min-width: 90px; touch-action: manipulation;
+  }
+  .touch-btn:active, .touch-btn.active { background: #535353; color: #fff; border-color: #535353; }
+  .touch-btn.shoot:active, .touch-btn.shoot.active { background: #3d7ea6; border-color: #3d7ea6; }
 </style>
 </head>
 <body>
@@ -94,6 +103,13 @@
   </div>
 
   <div class="hint" id="hint"></div>
+  <div id="touch-controls" class="touch-controls" style="display:none;">
+    <div class="touch-row">
+      <button class="touch-btn" id="t-left">← 左移</button>
+      <button class="touch-btn" id="t-right">右移 →</button>
+      <button class="touch-btn shoot" id="t-shoot">射击</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -238,6 +254,7 @@
   function resetDino() {
     dino.y = 0; dino.vy = 0; dino.jumping = false; dino.legPhase = 0;
     dino.jumpLift = 1; dino.jumpHang = 1; dino.facing = 1;
+    dino.jumpBufferTime = 0; dino.coyoteTime = COYOTE_TIME;
   }
 
   function initClouds(st) {
@@ -557,6 +574,7 @@
     game.frame += f;
     game.score += game.speed * f * 0.03;
     if (game.hurtTimer > 0) game.hurtTimer = Math.max(0, game.hurtTimer - dt);
+    if (game.messageTimer > 0) game.messageTimer = Math.max(0, game.messageTimer - dt);
 
     updateDinoVertical(dt, f, cfg);
 
@@ -593,6 +611,7 @@
     if (game.hurtTimer > 0) game.hurtTimer = Math.max(0, game.hurtTimer - dt);
     if (game.messageTimer > 0) game.messageTimer = Math.max(0, game.messageTimer - dt);
     if (game.shootCooldown > 0) game.shootCooldown = Math.max(0, game.shootCooldown - dt);
+    if (keys.shoot) playerShoot();
     if (game.pendingHerdTimer > 0) {
       game.pendingHerdTimer = Math.max(0, game.pendingHerdTimer - dt);
       if (game.pendingHerdTimer === 0 && game.herd.phase === 'idle') startHerdWarning();
@@ -623,7 +642,7 @@
     // prevent walking into pit while on ground level (must jump over or fall in intentionally?) - keep simple: allow fall
     if (game.playerWorldX < 40) game.playerWorldX = 40;
     if (game.playerWorldX > game.maxWorldX) game.maxWorldX = game.playerWorldX;
-    game.score = Math.max(0, game.maxWorldX - 200);
+    game.score = Math.max(0, game.maxWorldX - 200) + (game.bonusScore || 0);
 
     // camera
     game.cameraX = Math.max(0, game.playerWorldX - EXPLORE_SCREEN_X);
@@ -690,9 +709,21 @@
     game.projectiles = game.projectiles.filter(p => !p.dead && p.worldX > game.cameraX - 120 && p.worldX < game.cameraX + W + 120 && p.y > -40 && p.y < H + 40);
   }
 
+  function performJump() {
+    dino.jumping = true;
+    const jp = computeJumpParams();
+    dino.jumpLift = jp.lift; dino.jumpHang = jp.hang;
+    dino.vy = JUMP_V * dino.jumpLift;
+    dino.jumpBufferTime = 0;
+    dino.coyoteTime = 0;
+  }
+
   function updateDinoVertical(dt, f, cfg, groundBase) {
     groundBase = groundBase || 0;
+    if (dino.jumpBufferTime > 0) dino.jumpBufferTime = Math.max(0, dino.jumpBufferTime - dt);
+
     if (settings.invincible) {
+      dino.coyoteTime = 0;
       const r = clamp(game.speed / cfg.baseSpeed, 0.8, 1.8);
       if (keys.caps) dino.vy = 10 * r;
       else if (keys.space) dino.vy = -7.5 * r;
@@ -701,19 +732,34 @@
       if (dino.y > MAX_FLY) { dino.y = MAX_FLY; if (dino.vy < 0) dino.vy = 0; }
       if (dino.y < groundBase) { dino.y = groundBase; dino.vy = 0; }
       dino.jumping = dino.y > groundBase + 1;
-    } else if (dino.jumping) {
+      if (!dino.jumping) dino.legPhase = Math.floor(game.frame / 7) % 2;
+      return;
+    }
+
+    if (dino.jumping) {
+      dino.coyoteTime = 0;
       const gMul = keys.caps ? 4.2 : 1;
       dino.vy += GRAVITY * dino.jumpHang * gMul * f;
       dino.y -= dino.vy * f;
-      if (dino.y <= groundBase) { dino.y = groundBase; dino.vy = 0; dino.jumping = false; }
+      if (dino.y <= groundBase) {
+        dino.y = groundBase; dino.vy = 0; dino.jumping = false;
+        dino.coyoteTime = COYOTE_TIME;
+        if (dino.jumpBufferTime > 0) performJump();
+        else dino.legPhase = Math.floor(game.frame / 7) % 2;
+      }
     } else {
-      // standing: can fall into pit if above pit floor
+      // standing or just left ground
       if (dino.y > groundBase + 0.5) {
+        // fell off edge/platform (e.g. into pit) - allow coyote time
         dino.jumping = true;
         dino.vy = 0;
+        dino.coyoteTime = Math.max(0, dino.coyoteTime - dt);
+        if (dino.jumpBufferTime > 0 && dino.coyoteTime > 0) performJump();
       } else {
-        dino.legPhase = Math.floor(game.frame / 7) % 2;
         dino.y = groundBase;
+        dino.coyoteTime = COYOTE_TIME;
+        if (dino.jumpBufferTime > 0) performJump();
+        else dino.legPhase = Math.floor(game.frame / 7) % 2;
       }
     }
   }
@@ -769,12 +815,16 @@
     const dx = cx - nx, dy = cy - ny; return dx*dx + dy*dy <= cr*cr;
   }
 
+  function circleVsCircle(ax, ay, ar, bx, by, br) {
+    const dx = ax - bx, dy = ay - by, rr = ar + br;
+    return dx*dx + dy*dy <= rr*rr;
+  }
+
   function updateProjectiles(dt, f) {
     // move
     for (const p of game.projectiles) {
       if (p.dead) continue;
       p.worldX = (p.worldX != null ? p.worldX : p.x) + p.vx * f;
-      if (p.x != null && p.worldX == null) { /* runner compat none */ }
     }
     // player vs enemy fireball cancel
     const players = game.projectiles.filter(p => !p.dead && p.owner === 'player');
@@ -782,9 +832,7 @@
     for (const pf of players) {
       for (const ef of enemies) {
         if (pf.dead || ef.dead) continue;
-        const dx = (pf.worldX - ef.worldX), dy = (pf.y - ef.y);
-        const rr = (pf.r + ef.r);
-        if (dx*dx + dy*dy <= rr*rr) { pf.dead = true; ef.dead = true; }
+        if (circleVsCircle(pf.worldX, pf.y, pf.r, ef.worldX, ef.y, ef.r)) { pf.dead = true; ef.dead = true; }
       }
     }
     // player fireballs hit hostiles
@@ -792,10 +840,6 @@
       if (pf.dead || pf.owner !== 'player') continue;
       for (const h of game.hostiles) {
         if (h.dead) continue;
-        const hx = h.worldX - game.cameraX;
-        const hy = GROUND_Y - h.y - h.h;
-        const hb = { x: h.worldX, y: hy, w: h.w, h: h.h }; // world-space box for y? easier convert
-        // use screen/world mix carefully
         const hbox = { x: h.worldX, y: GROUND_Y - h.y - h.h, w: h.w, h: h.h };
         if (rectHitCircle(hbox.x, hbox.y, hbox.w, hbox.h, pf.worldX, pf.y, pf.r)) {
           pf.dead = true;
@@ -803,7 +847,7 @@
           if (h.hp <= 0) {
             h.dead = true; h._remove = true;
             spawnPixelCollapse(h.worldX, GROUND_Y - h.y, h.w, h.h, FG);
-            game.score += 50;
+            game.bonusScore = (game.bonusScore || 0) + 50;
             if (Math.random() < getHostileParams().roar) {
               spawnRoarEffect(h.worldX, GROUND_Y - h.y);
               setMessage('敌对恐龙发出怒吼！巨型恐龙群即将来袭！', 2.0);
@@ -906,7 +950,7 @@
 
   function update(dt) {
     if (!game) return;
-    if (game.shakeTime > 0 && game.shakeTime < 900) game.shakeTime = Math.max(0, game.shakeTime - dt);
+    if (!game.shakePersistent && game.shakeTime > 0) game.shakeTime = Math.max(0, game.shakeTime - dt);
     // let death/explosion particles animate on end screen
     if (game.particles && game.particles.length) updateParticles(dt, dt * 60);
     if (!game.started || game.over || game.paused) return;
@@ -925,12 +969,17 @@
   function drawCloud(x, y, s) {
     ctx.beginPath();
     ctx.arc(x, y, 14 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
     ctx.arc(x + 16 * s, y - 7 * s, 18 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
     ctx.arc(x + 36 * s, y, 13 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
   function drawGround() {
+    ctx.save();
     // pits (explore) - draw depressions first
     if (game.mode === 'explore') {
       for (const p of game.pits) {
@@ -983,6 +1032,26 @@
       }
       ctx.fillRect(x, GROUND_Y + 9 + p.y, p.w, p.h);
     }
+    ctx.restore();
+  }
+
+  function drawPitForeground() {
+    if (!game || game.mode !== 'explore') return;
+    ctx.save();
+    for (const p of game.pits) {
+      const sx = p.worldX - game.cameraX;
+      if (sx > W + 60 || sx + p.w < -60) continue;
+      // front rim to make player look inside pit
+      ctx.strokeStyle = '#bdbdbd';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sx, GROUND_Y + 1); ctx.lineTo(sx, GROUND_Y + 9); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx + p.w, GROUND_Y + 1); ctx.lineTo(sx + p.w, GROUND_Y + 9); ctx.stroke();
+      ctx.strokeStyle = FG;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sx, GROUND_Y + 1); ctx.lineTo(sx + 8, GROUND_Y + 1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx + p.w - 8, GROUND_Y + 1); ctx.lineTo(sx + p.w, GROUND_Y + 1); ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function drawDinoSprite(x, top, facing, jumping, legPhase, color, opts) {
@@ -1173,12 +1242,14 @@
   }
 
   function drawLives() {
+    ctx.save();
     const baseX = 24, baseY = 18;
     if (settings.invincible) {
       drawPixelArt(PX_INF, baseX, baseY, 3.2, '#e6a817');
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.font = 'bold 15px "Courier New", monospace'; ctx.fillStyle = '#e6a817';
       ctx.fillText('无敌', baseX + 9 * 3.2 + 12, baseY + 8);
+      ctx.restore();
       return;
     }
     const px = 3.2, stepX = 7 * px + 12;
@@ -1189,9 +1260,11 @@
       if (filled && blink) color = '#f3b8b8';
       drawPixelArt(PX_HEART, baseX + i * stepX, baseY, px, color);
     }
+    ctx.restore();
   }
 
   function drawScore() {
+    ctx.save();
     ctx.textAlign = 'right'; ctx.textBaseline = 'top';
     const label = game.mode === 'explore' ? '探索 ' : '';
     ctx.font = 'bold 22px "Courier New", monospace'; ctx.fillStyle = '#8a8a8a';
@@ -1201,6 +1274,7 @@
     if (b > 0) { ctx.fillStyle = '#c8c8c8'; ctx.fillText('HI ' + String(b).padStart(5, '0'), W - 24, 52); }
     ctx.fillStyle = '#cccccc';
     ctx.fillText('SPD ' + game.speed.toFixed(1), W - 24, 74);
+    ctx.restore();
   }
 
   function drawStartScreen() {
@@ -1210,7 +1284,7 @@
     ctx.fillStyle = FG; ctx.font = 'bold 32px "Courier New", monospace';
     const title = settings.mode === 'explore' ? '恐龙快跑 · 探索模式' : '恐龙快跑 · 闯关模式';
     ctx.fillText(title, W / 2, H / 2 - 58);
-    const isRestart = !!(game && (game.over || game.score > 0));
+    const isRestart = !!(game && (game.hasPlayed || game.over));
     if (isRestart && game && game.over) {
       ctx.font = 'bold 18px "Courier New", monospace'; ctx.fillStyle = '#8a8a8a';
       ctx.fillText('G A M E   O V E R   ·   得分 ' + Math.floor(game.score), W / 2, H / 2 - 20);
@@ -1254,7 +1328,7 @@
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
     if (!game) return;
     let sx = 0, sy = 0;
-    if (game.shakeTime > 0) {
+    if (game.shakePersistent || game.shakeTime > 0) {
       const m = game.shakeMag || 4;
       sx = rnd(-m, m); sy = rnd(-m * 0.6, m * 0.6);
     }
@@ -1268,6 +1342,7 @@
     drawHerd();
     drawDino();
     drawParticles();
+    if (game.mode === 'explore') drawPitForeground();
     ctx.restore();
     drawLives();
     drawScore();
@@ -1287,11 +1362,11 @@
     if (!game.started || game.over) { restart(); return; }
     if (game.paused) return;
     if (settings.invincible) return;
-    if (!dino.jumping) {
-      dino.jumping = true;
-      const jp = computeJumpParams();
-      dino.jumpLift = jp.lift; dino.jumpHang = jp.hang;
-      dino.vy = JUMP_V * dino.jumpLift;
+    dino.jumpBufferTime = JUMP_BUFFER_TIME;
+    if (!dino.jumping || dino.coyoteTime > 0) {
+      // try immediate jump if eligible (ground/coyote)
+      if (!dino.jumping) performJump();
+      else if (dino.coyoteTime > 0) performJump();
     }
   }
 
@@ -1335,14 +1410,30 @@
   window.addEventListener('pointercancel', function () { keys.space = false; });
   window.addEventListener('blur', function () { keys.space = false; keys.shift = false; keys.ctrl = false; keys.caps = false; keys.left = false; keys.right = false; keys.shoot = false; });
 
+  function bindTouchButton(id, onDown, onUp) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const down = (e) => { e.preventDefault(); el.classList.add('active'); onDown(); };
+    const up = (e) => { e.preventDefault(); el.classList.remove('active'); onUp(); };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointerleave', up);
+    el.addEventListener('pointercancel', up);
+  }
+  bindTouchButton('t-left', () => { if (game && game.mode === 'explore' && game.started && !game.paused) { keys.left = true; dino.facing = -1; } }, () => { keys.left = false; });
+  bindTouchButton('t-right', () => { if (game && game.mode === 'explore' && game.started && !game.paused) { keys.right = true; dino.facing = 1; } }, () => { keys.right = false; });
+  bindTouchButton('t-shoot', () => { if (game && game.mode === 'explore') { keys.shoot = true; playerShoot(); } }, () => { keys.shoot = false; });
+
   // ---------- UI ----------
   const hintEl = document.getElementById('hint');
+  const touchControls = document.getElementById('touch-controls');
   function updateHint() {
     if (settings.mode === 'explore') {
-      hintEl.innerHTML = '<span class="kbd">A</span>/<span class="kbd">D</span> 或 <span class="kbd">←</span>/<span class="kbd">→</span> 左右移动 · <span class="kbd">空格</span>/<span class="kbd">↑</span> 跳跃 · <span class="kbd">F</span>/<span class="kbd">J</span> 发射火球 · <span class="kbd">Shift</span> 加速 <span class="kbd">Ctrl</span> 减速 <span class="kbd">CapsLock</span> 快速下落 · <span class="kbd">P</span>/<span class="kbd">Esc</span> 暂停<br>躲进地坑可避开巨型恐龙群；火球可抵消敌方火球，3 发命中消灭敌对恐龙';
+      hintEl.innerHTML = '<span class="kbd">A</span>/<span class="kbd">D</span> 或 <span class="kbd">←</span>/<span class="kbd">→</span> 左右移动 · <span class="kbd">空格</span>/<span class="kbd">↑</span>/点击画面 跳跃 · 按住 <span class="kbd">F</span>/<span class="kbd">J</span> 或下方射击按钮连续发射 · <span class="kbd">P</span>/<span class="kbd">Esc</span> 暂停<br>躲进地坑可避开巨型恐龙群；火球可抵消敌方火球，命中可消灭敌对恐龙（血量随机）';
     } else {
-      hintEl.innerHTML = '<span class="kbd">空格</span> / <span class="kbd">↑</span> / 点击画面 —— 跳跃（无敌模式下按住可一直飞）<br><span class="kbd">Shift</span> 加速 · <span class="kbd">Ctrl</span> 减速 · <span class="kbd">CapsLock</span> 快速下落 · <span class="kbd">P</span> / <span class="kbd">Esc</span> 暂停';
+      hintEl.innerHTML = '<span class="kbd">空格</span> / <span class="kbd">↑</span> / 点击画面 —— 跳跃（无敌模式下按住可一直飞，<span class="kbd">CapsLock</span> 下落）<br><span class="kbd">Shift</span> 加速 · <span class="kbd">Ctrl</span> 减速 · <span class="kbd">CapsLock</span> 快速下落 · <span class="kbd">P</span> / <span class="kbd">Esc</span> 暂停';
     }
+    if (touchControls) touchControls.style.display = settings.mode === 'explore' ? 'block' : 'none';
   }
 
   function syncModeButtons() {
@@ -1357,13 +1448,25 @@
     invBtn.textContent = '无敌模式：' + (settings.invincible ? '开' : '关');
   }
 
+  function confirmResetIfNeeded() {
+    if (game && game.started && !game.over) {
+      return window.confirm('当前进度将重新开始，确定切换吗？');
+    }
+    return true;
+  }
+
   document.querySelectorAll('.btn.mode').forEach(b => b.addEventListener('click', function () {
+    if (b.dataset.mode === settings.mode) { b.blur(); return; }
+    if (!confirmResetIfNeeded()) { b.blur(); return; }
     settings.mode = b.dataset.mode; syncModeButtons(); updateHint(); prepareIdle(); b.blur();
   }));
   document.querySelectorAll('.btn.diff').forEach(b => b.addEventListener('click', function () {
+    if (b.dataset.diff === settings.difficulty) { b.blur(); return; }
+    if (!confirmResetIfNeeded()) { b.blur(); return; }
     settings.difficulty = b.dataset.diff; syncDiffButtons(); prepareIdle(); b.blur();
   }));
   document.getElementById('invBtn').addEventListener('click', function () {
+    if (!confirmResetIfNeeded()) { this.blur(); return; }
     settings.invincible = !settings.invincible; syncInvBtn(); prepareIdle(); this.blur();
   });
   const speedInput = document.getElementById('speed');
@@ -1381,6 +1484,16 @@
     update(dt); render();
     requestAnimationFrame(loop);
   }
+
+  function setupCanvasDPR() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  setupCanvasDPR();
+  window.addEventListener('resize', setupCanvasDPR);
 
   makePebbles();
   syncModeButtons(); syncDiffButtons(); syncInvBtn(); updateHint();
