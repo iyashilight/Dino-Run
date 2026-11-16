@@ -187,6 +187,12 @@
     }
   }
 
+  function getInitialHerdTimer() {
+    if (settings.difficulty === 'hard') return rnd(10, 18);
+    if (settings.difficulty === 'normal') return rnd(12, 20);
+    return rnd(15, 24);
+  }
+
   function buildBaseState(started) {
     const cfg = currentCfg();
     return {
@@ -194,8 +200,10 @@
       over: false,
       paused: false,
       started: !!started,
+      hasPlayed: !!started,
       speed: cfg.baseSpeed,
       score: 0,
+      bonusScore: 0,
       frame: 0,
       groundOffset: 0,
       obstacles: [],
@@ -217,12 +225,13 @@
       shootCooldown: 0,
       nextHostileX: 900,
       pitSpawnX: 600,
-      herd: { phase: 'idle', timer: (settings.difficulty === 'hard' ? rnd(10,18) : settings.difficulty === 'normal' ? rnd(12,20) : rnd(15,24)), x: 0, speed: 0, width: 0, height: 0, warned: 0, members: [] },
+      herd: { phase: 'idle', timer: getInitialHerdTimer(), x: 0, speed: 0, width: 0, height: 0, warned: 0, members: [] },
       pendingHerdTimer: 0,
       message: '',
       messageTimer: 0,
       shakeTime: 0,
-      shakeMag: 0
+      shakeMag: 0,
+      shakePersistent: false
     };
   }
 
@@ -250,7 +259,7 @@
       game.maxWorldX = 200;
       game.cameraX = Math.max(0, game.playerWorldX - EXPLORE_SCREEN_X);
       game.pitSpawnX = game.cameraX + 700;
-      game.herd.timer = rnd(15, 28);
+      game.herd.timer = getInitialHerdTimer();
       game.herd.phase = 'idle';
     }
   }
@@ -313,6 +322,9 @@
     game.started = false;
     game.lives = 0;
     game.hurtTimer = 0;
+    game.shakeTime = 0;
+    game.shakeMag = 0;
+    game.shakePersistent = false;
     const s = Math.floor(game.score);
     if (s > getBest()) setBest(s);
   }
@@ -483,7 +495,7 @@
     game.herd.phase = 'warning';
     game.herd.timer = rnd(1.6, 2.4);
     setMessage('巨型恐龙群接近！快找坑躲避！', 2.0);
-    game.shakeTime = 999;
+    game.shakePersistent = true;
     game.shakeMag = 3.5;
   }
   function pickHerdSpeed() {
@@ -516,7 +528,7 @@
     }
     // sort by ox for depth-ish layering
     game.herd.members.sort((a, b) => a.ox - b.ox);
-    game.shakeTime = 999;
+    game.shakePersistent = true;
     game.shakeMag = 8;
   }
   function getHerdIdleRange() {
@@ -531,6 +543,7 @@
     game.herd.timer = rnd(r[0], r[1]);
     game.shakeTime = 0;
     game.shakeMag = 0;
+    game.shakePersistent = false;
   }
 
   // ---------- Update ----------
@@ -846,14 +859,13 @@
       h.timer -= dt;
       if (h.timer <= 0) startHerdWarning();
     } else if (h.phase === 'warning') {
-      game.shakeTime = 999;
+      game.shakePersistent = true;
       game.shakeMag = 3.5;
       h.timer -= dt;
       if (h.timer <= 0) startHerdActive();
     } else if (h.phase === 'active') {
       h.x -= h.speed * dt * 60; // move left in world
-      // keep shaking while herd event is active
-      game.shakeTime = 999;
+      game.shakePersistent = true;
       game.shakeMag = Math.max(game.shakeMag || 0, 8);
       if (h.x + h.width < game.cameraX - 120) endHerd();
     }
