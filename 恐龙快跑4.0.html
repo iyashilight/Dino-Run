@@ -254,7 +254,7 @@
   function resetDino() {
     dino.y = 0; dino.vy = 0; dino.jumping = false; dino.legPhase = 0;
     dino.jumpLift = 1; dino.jumpHang = 1; dino.facing = 1;
-    dino.jumpBufferTime = 0; dino.coyoteTime = COYOTE_TIME;
+    dino.jumpsRemaining = MAX_JUMPS;
   }
 
   function initClouds(st) {
@@ -709,21 +709,64 @@
     game.projectiles = game.projectiles.filter(p => !p.dead && p.worldX > game.cameraX - 120 && p.worldX < game.cameraX + W + 120 && p.y > -40 && p.y < H + 40);
   }
 
+  function playerFootWorldX() {
+    return (game && game.mode === 'explore') ? (game.playerWorldX + 22) : (DINO_X + 22);
+  }
+
+  function spawnJumpDust() {
+    const wx = playerFootWorldX();
+    const baseY = GROUND_Y - dino.y;
+    const count = dino.jumpsRemaining === 1 ? 8 : 6; // after decrementing: 1 means did first jump
+    for (let i = 0; i < count; i++) {
+      game.particles.push({
+        type: 'dust',
+        worldX: wx + rnd(-8, 8),
+        y: baseY - rnd(0, 3),
+        vx: rnd(-1.8, 1.8),
+        vy: rnd(-2.8, -0.8),
+        w: rnd(2, 4),
+        h: rnd(2, 4),
+        life: rnd(0.18, 0.35),
+        maxLife: 0.35,
+        color: Math.random() < 0.5 ? '#9a9a9a' : '#c2c2c2'
+      });
+    }
+  }
+
+  function spawnLandingDust() {
+    const wx = playerFootWorldX();
+    const baseY = GROUND_Y - dino.y;
+    for (let i = 0; i < 7; i++) {
+      game.particles.push({
+        type: 'dust',
+        worldX: wx + rnd(-10, 10),
+        y: baseY - rnd(0, 2),
+        vx: rnd(-2.2, 2.2),
+        vy: rnd(-1.8, -0.4),
+        w: rnd(2, 4),
+        h: rnd(2, 3),
+        life: rnd(0.16, 0.32),
+        maxLife: 0.32,
+        color: Math.random() < 0.5 ? '#b0b0b0' : '#d0d0d0'
+      });
+    }
+  }
+
   function performJump() {
+    if (!game || settings.invincible) return;
+    if (dino.jumpsRemaining <= 0) return;
     dino.jumping = true;
     const jp = computeJumpParams();
     dino.jumpLift = jp.lift; dino.jumpHang = jp.hang;
     dino.vy = JUMP_V * dino.jumpLift;
-    dino.jumpBufferTime = 0;
-    dino.coyoteTime = 0;
+    dino.jumpsRemaining -= 1;
+    spawnJumpDust();
   }
 
   function updateDinoVertical(dt, f, cfg, groundBase) {
     groundBase = groundBase || 0;
-    if (dino.jumpBufferTime > 0) dino.jumpBufferTime = Math.max(0, dino.jumpBufferTime - dt);
 
     if (settings.invincible) {
-      dino.coyoteTime = 0;
       const r = clamp(game.speed / cfg.baseSpeed, 0.8, 1.8);
       if (keys.caps) dino.vy = 10 * r;
       else if (keys.space) dino.vy = -7.5 * r;
@@ -732,34 +775,32 @@
       if (dino.y > MAX_FLY) { dino.y = MAX_FLY; if (dino.vy < 0) dino.vy = 0; }
       if (dino.y < groundBase) { dino.y = groundBase; dino.vy = 0; }
       dino.jumping = dino.y > groundBase + 1;
+      dino.jumpsRemaining = MAX_JUMPS;
       if (!dino.jumping) dino.legPhase = Math.floor(game.frame / 7) % 2;
       return;
     }
 
     if (dino.jumping) {
-      dino.coyoteTime = 0;
       const gMul = keys.caps ? 4.2 : 1;
       dino.vy += GRAVITY * dino.jumpHang * gMul * f;
       dino.y -= dino.vy * f;
       if (dino.y <= groundBase) {
         dino.y = groundBase; dino.vy = 0; dino.jumping = false;
-        dino.coyoteTime = COYOTE_TIME;
-        if (dino.jumpBufferTime > 0) performJump();
-        else dino.legPhase = Math.floor(game.frame / 7) % 2;
+        dino.jumpsRemaining = MAX_JUMPS;
+        spawnLandingDust();
+        dino.legPhase = Math.floor(game.frame / 7) % 2;
       }
     } else {
-      // standing or just left ground
+      // standing: can fall into pit if above pit floor
       if (dino.y > groundBase + 0.5) {
-        // fell off edge/platform (e.g. into pit) - allow coyote time
         dino.jumping = true;
         dino.vy = 0;
-        dino.coyoteTime = Math.max(0, dino.coyoteTime - dt);
-        if (dino.jumpBufferTime > 0 && dino.coyoteTime > 0) performJump();
+        // walked/fell off edge: keep one air jump available
+        dino.jumpsRemaining = Math.min(dino.jumpsRemaining, MAX_JUMPS - 1);
       } else {
+        dino.legPhase = Math.floor(game.frame / 7) % 2;
         dino.y = groundBase;
-        dino.coyoteTime = COYOTE_TIME;
-        if (dino.jumpBufferTime > 0) performJump();
-        else dino.legPhase = Math.floor(game.frame / 7) % 2;
+        dino.jumpsRemaining = MAX_JUMPS;
       }
     }
   }
@@ -878,9 +919,11 @@
       if (p.type === 'roar') {
         p.r += 40 * dt;
       } else {
-        p.vy += 0.45 * f;
+        const g = p.type === 'dust' ? 0.18 : 0.45;
+        p.vy += g * f;
         p.worldX += p.vx * f;
         p.y += p.vy * f;
+        if (p.type === 'dust') p.vx *= 0.96;
       }
     }
     game.particles = game.particles.filter(p => {
@@ -1362,12 +1405,7 @@
     if (!game.started || game.over) { restart(); return; }
     if (game.paused) return;
     if (settings.invincible) return;
-    dino.jumpBufferTime = JUMP_BUFFER_TIME;
-    if (!dino.jumping || dino.coyoteTime > 0) {
-      // try immediate jump if eligible (ground/coyote)
-      if (!dino.jumping) performJump();
-      else if (dino.coyoteTime > 0) performJump();
-    }
+    performJump();
   }
 
   window.addEventListener('keydown', function (e) {
