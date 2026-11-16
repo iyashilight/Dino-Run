@@ -474,8 +474,8 @@
     game.herd.phase = 'active';
     // variable speed each time, mostly slow
     game.herd.speed = pickHerdSpeed();
-    game.herd.width = rnd(850, 1400);
-    game.herd.height = 180;
+    game.herd.width = rnd(1100, 1700);
+    game.herd.height = 260;
     game.herd.x = game.cameraX + W + 120;
     game.herd.timer = 0;
     // randomize members with overlapping positions
@@ -483,17 +483,17 @@
     game.herd.members = [];
     for (let i = 0; i < count; i++) {
       game.herd.members.push({
-        ox: rnd(0, game.herd.width - 120),
-        oy: rnd(0, 14),
-        scale: rnd(1.7, 3.5),
+        ox: rnd(0, game.herd.width - 180),
+        oy: rnd(0, 10),
+        scale: rnd(3.0, 5.2),
         shade: ['#666', '#707070', '#787878', '#5f5f5f'][Math.floor(rnd(0, 4))],
         legPhase: Math.random() < 0.5 ? 0 : 1
       });
     }
     // sort by ox for depth-ish layering
     game.herd.members.sort((a, b) => a.ox - b.ox);
-    game.shakeTime = 0.8;
-    game.shakeMag = 7;
+    game.shakeTime = 0.9;
+    game.shakeMag = 8;
   }
   function endHerd() {
     game.herd.phase = 'idle';
@@ -561,6 +561,12 @@
     if (inPitBottom) moveV *= 0.45; // hard to move inside
     const prevX = game.playerWorldX;
     game.playerWorldX += moveV * f;
+    // if trapped in pit bottom, cannot walk out - must jump up first
+    if (inPitBottom && pitUnder && dino.y < 0) {
+      const minX = pitUnder.worldX - 2;
+      const maxX = pitUnder.worldX + pitUnder.w - DINO_W + 2;
+      game.playerWorldX = clamp(game.playerWorldX, minX, maxX);
+    }
     if (game.playerWorldX < 40) game.playerWorldX = 40;
     if (game.playerWorldX > game.maxWorldX) game.maxWorldX = game.playerWorldX;
     game.score = Math.max(0, game.maxWorldX - 200);
@@ -568,8 +574,12 @@
     // camera
     game.cameraX = Math.max(0, game.playerWorldX - EXPLORE_SCREEN_X);
 
-    // re-evaluate pit after horizontal move
-    const pitUnder2 = getPitUnderPlayer();
+    // re-evaluate pit after horizontal move (if jumped above ground, allow leaving pit)
+    let pitUnder2 = getPitUnderPlayer();
+    if (pitUnder2 && dino.y > 0) {
+      // airborne above ground level - treat as outside pit for landing
+      pitUnder2 = null;
+    }
     const groundBase2 = pitUnder2 ? -pitUnder2.d : 0;
     updateDinoVertical(dt, f, cfg, groundBase2);
 
@@ -674,10 +684,11 @@
       const dist = game.playerWorldX - h.worldX;
       const ad = Math.abs(dist);
       const ms = (h.moveSpeed || 1);
-      if (ad > 320) h.worldX += Math.sign(dist) * 1.1 * ms * f;
-      else if (ad < 170) h.worldX -= Math.sign(dist || 1) * 0.7 * ms * f;
+      // walk toward player (can come in from right side as player explores)
+      if (ad > 260) h.worldX += Math.sign(dist) * 1.2 * ms * f;
+      else if (ad < 150) h.worldX -= Math.sign(dist || 1) * 0.8 * ms * f;
       // keep out of pits
-      if (obstacleOverlapsPit(h.worldX, h.w)) h.worldX += (h.facing > 0 ? -1 : 1) * 50;
+      if (obstacleOverlapsPit(h.worldX, h.w)) h.worldX += (h.facing > 0 ? -1 : 1) * 60;
       // shoot
       h.shootCd -= dt;
       if (h.shootCd <= 0 && ad < 520) {
