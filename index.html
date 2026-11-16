@@ -219,7 +219,9 @@
       pitSpawnX: 600,
       herd: { phase: 'idle', timer: rnd(12, 22), x: 0, speed: 0, width: 0, height: 0, warned: 0 },
       message: '',
-      messageTimer: 0
+      messageTimer: 0,
+      shakeTime: 0,
+      shakeMag: 0
     };
   }
 
@@ -337,19 +339,30 @@
 
   // ---------- Explore entities ----------
   function spawnExploreObstacleAt(worldX) {
-    // avoid pits
-    if (isInPitRange(worldX, worldX + 40)) worldX += 80;
-    if (Math.random() < 0.18 && Math.abs(worldX - game.playerWorldX) > 300) {
-      const alt = Math.random() < 0.5 ? 72 : 104;
-      game.obstacles.push({ type: 'bird', worldX: worldX, y: GROUND_Y - alt - 30, w: 46, h: 30 });
-      return;
+    let spawnX = worldX;
+    for (let tries = 0; tries < 6; tries++) {
+      const willBeBird = Math.random() < 0.18 && Math.abs(spawnX - game.playerWorldX) > 300;
+      if (willBeBird) {
+        // birds fly in air; avoid placing directly above pit openings for clarity
+        if (!obstacleOverlapsPit(spawnX, 46)) {
+          const alt = Math.random() < 0.5 ? 72 : 104;
+          game.obstacles.push({ type: 'bird', worldX: spawnX, y: GROUND_Y - alt - 30, w: 46, h: 30 });
+          return;
+        }
+      } else {
+        const small = Math.random() < 0.55;
+        const cw = small ? 18 : 26;
+        const ch = small ? 36 : 52;
+        const count = small ? (Math.random() < 0.45 ? 2 : 1) : (Math.random() < 0.30 ? 2 : 1);
+        const gap = 12;
+        const w = count * cw + (count - 1) * gap;
+        if (!obstacleOverlapsPit(spawnX, w)) {
+          game.obstacles.push({ type: 'cactus', worldX: spawnX, w, h: ch, cw, ch, count, gap });
+          return;
+        }
+      }
+      spawnX += 90;
     }
-    const small = Math.random() < 0.55;
-    const cw = small ? 18 : 26;
-    const ch = small ? 36 : 52;
-    const count = small ? (Math.random() < 0.45 ? 2 : 1) : (Math.random() < 0.30 ? 2 : 1);
-    const gap = 12;
-    game.obstacles.push({ type: 'cactus', worldX: worldX, w: count * cw + (count - 1) * gap, h: ch, cw, ch, count, gap });
   }
 
   function spawnPit() {
@@ -370,11 +383,18 @@
   }
   function getPitUnderPlayer() {
     const px = game.playerWorldX;
-    const footX1 = px + 8, footX2 = px + 36;
+    const centerX = px + 22;
     for (const p of game.pits) {
-      if (footX2 > p.worldX + 6 && footX1 < p.worldX + p.w - 6) return p;
+      if (centerX > p.worldX + 8 && centerX < p.worldX + p.w - 8) return p;
     }
     return null;
+  }
+
+  function obstacleOverlapsPit(worldX, width) {
+    for (const p of game.pits) {
+      if (worldX < p.worldX + p.w + 6 && worldX + width > p.worldX - 6) return true;
+    }
+    return false;
   }
 
   function spawnHostile() {
@@ -382,11 +402,18 @@
     const side = Math.random() < 0.75 ? 1 : -1;
     let wx = game.playerWorldX + side * rnd(260, 420);
     wx = Math.max(80, wx);
-    if (isInPitRange(wx - 30, wx + 30)) wx += 90;
+    if (obstacleOverlapsPit(wx - 20, 60)) wx += 120;
+    const hp = Math.floor(rnd(1, 4.99)); // 1-4 random
+    const shootBase = rnd(0.7, 2.2);
+    const shootVar = rnd(0.4, 1.4);
     game.hostiles.push({
-      worldX: wx, y: 0, w: 42, h: 44, hp: 3, maxHp: 3,
+      worldX: wx, y: 0, w: DINO_W, h: DINO_H, hp: hp, maxHp: hp,
       facing: wx < game.playerWorldX ? 1 : -1,
-      shootCd: rnd(0.8, 1.8), vx: 0, hitFlash: 0, dead: false
+      shootCd: rnd(0.5, 1.5),
+      shootBase: shootBase,
+      shootVar: shootVar,
+      moveSpeed: rnd(0.4, 1.4),
+      hitFlash: 0, dead: false
     });
   }
 
@@ -410,6 +437,7 @@
   function spawnPixelCollapse(worldX, baseY, w, h, colorMain) {
     const cols = Math.max(4, Math.floor(w / 6));
     const rows = Math.max(4, Math.floor(h / 6));
+    const colors = [colorMain, '#7a7a7a', '#9a9a9a', '#5f5f5f'];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         if (Math.random() < 0.15) continue;
@@ -423,7 +451,7 @@
           h: Math.max(2, py - 1),
           life: rnd(0.35, 0.75),
           maxLife: 0.75,
-          color: Math.random() < 0.3 ? '#7a7a7a' : colorMain,
+          color: colors[Math.floor(Math.random() * colors.length)],
           rot: rnd(-0.2, 0.2)
         });
       }
@@ -434,15 +462,37 @@
     game.herd.phase = 'warning';
     game.herd.timer = rnd(1.6, 2.4);
     setMessage('巨型恐龙群接近！快找坑躲避！', 2.0);
+    game.shakeTime = 0.5;
+    game.shakeMag = 3;
   }
+  function pickHerdSpeed() {
+    // mostly slow, sometimes faster
+    const r = Math.random();
+    if (r < 0.65) return rnd(7, 12);
+    if (r < 0.9) return rnd(12, 18);
+    return rnd(18, 24);
+  }
+
   function startHerdActive() {
     game.herd.phase = 'active';
-    // variable speed each time
-    game.herd.speed = rnd(14, 28);
-    game.herd.width = rnd(520, 820);
-    game.herd.height = 150;
-    game.herd.x = game.cameraX + W + 80; // world x of herd front-right
+    // variable speed each time, mostly slow
+    game.herd.speed = pickHerdSpeed();
+    game.herd.width = rnd(850, 1400);
+    game.herd.height = 180;
+    game.herd.x = game.cameraX + W + 120;
     game.herd.timer = 0;
+    // randomize members
+    const count = 5 + Math.floor(rnd(0, 3)); // 5-7
+    game.herd.members = [];
+    for (let i = 0; i < count; i++) {
+      game.herd.members.push({
+        scale: rnd(1.6, 3.4),
+        shade: Math.random() < 0.5 ? '#6a6a6a' : '#7a7a7a',
+        legPhase: Math.random() < 0.5 ? 0 : 1
+      });
+    }
+    game.shakeTime = 0.8;
+    game.shakeMag = 7;
   }
   function endHerd() {
     game.herd.phase = 'idle';
@@ -620,22 +670,22 @@
       if (h.dead) continue;
       if (h.hitFlash > 0) h.hitFlash = Math.max(0, h.hitFlash - dt);
       h.facing = (game.playerWorldX >= h.worldX) ? 1 : -1;
-      // simple hover/move
       const dist = game.playerWorldX - h.worldX;
       const ad = Math.abs(dist);
-      if (ad > 320) h.worldX += Math.sign(dist) * 1.2 * f;
-      else if (ad < 180) h.worldX -= Math.sign(dist || 1) * 0.6 * f;
+      const ms = (h.moveSpeed || 1);
+      if (ad > 320) h.worldX += Math.sign(dist) * 1.1 * ms * f;
+      else if (ad < 170) h.worldX -= Math.sign(dist || 1) * 0.7 * ms * f;
       // keep out of pits
-      const p = isInPitRange(h.worldX - 10, h.worldX + 40);
-      if (p) h.worldX = h.facing > 0 ? p.worldX - 45 : p.worldX + p.w + 10;
+      if (obstacleOverlapsPit(h.worldX, h.w)) h.worldX += (h.facing > 0 ? -1 : 1) * 50;
       // shoot
       h.shootCd -= dt;
-      if (h.shootCd <= 0 && Math.abs(dist) < 520) {
+      if (h.shootCd <= 0 && ad < 520) {
         const dir = h.facing;
         const y = GROUND_Y - h.y - 24;
         spawnFireball('enemy', h.worldX + (dir > 0 ? 34 : 6), y, dir);
-        const base = settings.difficulty === 'hard' ? 1.1 : settings.difficulty === 'normal' ? 1.4 : 1.7;
-        h.shootCd = rnd(base, base + 1.0);
+        const base = h.shootBase != null ? h.shootBase : 1.4;
+        const vari = h.shootVar != null ? h.shootVar : 0.8;
+        h.shootCd = rnd(base, base + vari);
       }
     }
   }
@@ -678,7 +728,7 @@
           h.hp -= 1; h.hitFlash = 0.12;
           if (h.hp <= 0) {
             h.dead = true; h._remove = true;
-            spawnPixelCollapse(h.worldX, GROUND_Y - h.y, h.w, h.h, '#6b8e5a');
+            spawnPixelCollapse(h.worldX, GROUND_Y - h.y, h.w, h.h, FG);
             game.score += 50;
             setMessage('消灭敌对恐龙！', 1.0);
           }
@@ -742,7 +792,7 @@
     for (const en of game.hostiles) {
       if (en.dead) continue;
       const eb = { x: en.worldX, y: GROUND_Y - en.y - en.h, w: en.w, h: en.h };
-      if (collides(herdBox, eb)) { en.dead = true; en._remove = true; spawnPixelCollapse(en.worldX, GROUND_Y - en.y, en.w, en.h, '#6b8e5a'); }
+      if (collides(herdBox, eb)) { en.dead = true; en._remove = true; spawnPixelCollapse(en.worldX, GROUND_Y - en.y, en.w, en.h, FG); }
     }
     // clear projectiles
     for (const p of game.projectiles) {
@@ -765,6 +815,7 @@
 
   function update(dt) {
     if (!game) return;
+    if (game.shakeTime > 0) game.shakeTime = Math.max(0, game.shakeTime - dt);
     // let death/explosion particles animate on end screen
     if (game.particles && game.particles.length) updateParticles(dt, dt * 60);
     if (!game.started || game.over || game.paused) return;
@@ -843,29 +894,19 @@
     }
   }
 
-  function drawDino() {
-    if (game && game.over && game._deathHandled) return;
-    const x = dinoScreenX();
-    const footY = GROUND_Y - dino.y;
-    const top = footY - DINO_H;
+  function drawDinoSprite(x, top, facing, jumping, legPhase, color, opts) {
+    opts = opts || {};
     ctx.save();
-    if (settings.invincible) {
-      const g = ctx.createRadialGradient(x + 22, top + 24, 6, x + 22, top + 24, 48);
-      g.addColorStop(0, 'rgba(255, 200, 60, 0.38)'); g.addColorStop(1, 'rgba(255, 200, 60, 0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x + 22, top + 24, 48, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 0.92;
-    } else if (game.hurtTimer > 0) {
-      ctx.globalAlpha = (Math.floor(game.frame / 5) % 2 === 0) ? 0.22 : 0.75;
-    }
-    ctx.fillStyle = FG;
-    // body (flip based on facing in explore? keep simple: small indicator)
+    if (opts.alpha != null) ctx.globalAlpha = opts.alpha;
+    ctx.fillStyle = color;
     // tail
     ctx.beginPath();
-    if (dino.facing < 0) { ctx.moveTo(x + 33, top + 20); ctx.lineTo(x + 44, top + 15); ctx.lineTo(x + 41, top + 30); ctx.lineTo(x + 32, top + 32); }
+    if (facing < 0) { ctx.moveTo(x + 33, top + 20); ctx.lineTo(x + 44, top + 15); ctx.lineTo(x + 41, top + 30); ctx.lineTo(x + 32, top + 32); }
     else { ctx.moveTo(x + 11, top + 20); ctx.lineTo(x + 0, top + 15); ctx.lineTo(x + 3, top + 30); ctx.lineTo(x + 12, top + 32); }
     ctx.closePath(); ctx.fill();
+    // body / neck / head / arm
     ctx.fillRect(x + 8, top + 21, 25, 17);
-    if (dino.facing < 0) {
+    if (facing < 0) {
       ctx.fillRect(x + 8, top + 9, 12, 16);
       ctx.fillRect(x + 0, top + 1, 18, 16);
       ctx.fillRect(x + 5, top + 26, 9, 4);
@@ -875,11 +916,28 @@
       ctx.fillRect(x + 30, top + 26, 9, 4);
     }
     let l1, l2;
-    if (dino.jumping) { l1 = 8; l2 = 6; } else if (dino.legPhase) { l1 = 6; l2 = 9; } else { l1 = 9; l2 = 6; }
+    if (jumping) { l1 = 8; l2 = 6; } else if (legPhase) { l1 = 6; l2 = 9; } else { l1 = 9; l2 = 6; }
     ctx.fillRect(x + 11, top + 38, 7, l1); ctx.fillRect(x + 23, top + 38, 7, l2);
-    ctx.fillStyle = '#ffffff';
-    if (dino.facing < 0) ctx.fillRect(x + 2, top + 5, 5, 5); else ctx.fillRect(x + 37, top + 5, 5, 5);
+    // eye
+    ctx.fillStyle = opts.eyeColor || '#ffffff';
+    if (facing < 0) ctx.fillRect(x + 2, top + 5, 5, 5); else ctx.fillRect(x + 37, top + 5, 5, 5);
     ctx.restore();
+  }
+
+  function drawDino() {
+    if (game && game.over && game._deathHandled) return;
+    const x = dinoScreenX();
+    const footY = GROUND_Y - dino.y;
+    const top = footY - DINO_H;
+    if (settings.invincible) {
+      const g = ctx.createRadialGradient(x + 22, top + 24, 6, x + 22, top + 24, 48);
+      g.addColorStop(0, 'rgba(255, 200, 60, 0.38)'); g.addColorStop(1, 'rgba(255, 200, 60, 0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x + 22, top + 24, 48, 0, Math.PI * 2); ctx.fill();
+    }
+    let alpha = 1;
+    if (settings.invincible) alpha = 0.92;
+    else if (game.hurtTimer > 0) alpha = (Math.floor(game.frame / 5) % 2 === 0) ? 0.22 : 0.75;
+    drawDinoSprite(x, top, dino.facing, dino.jumping, dino.legPhase, FG, { alpha: alpha, eyeColor: '#ffffff' });
   }
 
   function drawCactusAt(x, w, h) {
@@ -931,41 +989,13 @@
       const sx = h.worldX - game.cameraX;
       if (sx < -80 || sx > W + 80) continue;
       const top = GROUND_Y - h.y - h.h;
-      ctx.save();
-      if (h.hitFlash > 0) ctx.globalAlpha = 0.55;
-      const body = '#7a7a7a', dark = '#5f5f5f', light = '#9a9a9a';
-      // tail
-      ctx.fillStyle = dark;
-      if (h.facing > 0) ctx.fillRect(sx - 2, top + 18, 10, 8); else ctx.fillRect(sx + 34, top + 18, 10, 8);
-      // body
-      ctx.fillStyle = body;
-      ctx.fillRect(sx + 6, top + 16, 28, 18);
-      // neck/head
-      if (h.facing > 0) {
-        ctx.fillRect(sx + 24, top + 6, 12, 14);
-        ctx.fillRect(sx + 30, top + 0, 14, 14);
-        ctx.fillStyle = light; ctx.fillRect(sx + 32, top + 2, 6, 4);
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(sx + 39, top + 4, 4, 4);
-        ctx.fillStyle = dark; ctx.fillRect(sx + 40, top + 5, 2, 2);
-      } else {
-        ctx.fillRect(sx + 6, top + 6, 12, 14);
-        ctx.fillRect(sx - 2, top + 0, 14, 14);
-        ctx.fillStyle = light; ctx.fillRect(sx + 4, top + 2, 6, 4);
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(sx - 1, top + 4, 4, 4);
-        ctx.fillStyle = dark; ctx.fillRect(sx + 0, top + 5, 2, 2);
-      }
-      // legs
-      ctx.fillStyle = dark;
-      ctx.fillRect(sx + 10, top + 34, 7, 10); ctx.fillRect(sx + 23, top + 34, 7, 10);
-      // spikes/back detail
-      ctx.fillStyle = light;
-      ctx.fillRect(sx + 12, top + 14, 4, 3); ctx.fillRect(sx + 19, top + 13, 4, 3); ctx.fillRect(sx + 26, top + 14, 4, 3);
+      const alpha = h.hitFlash > 0 ? 0.55 : 1;
+      drawDinoSprite(sx, top, h.facing, false, Math.floor(game.frame / 8) % 2, '#111111', { alpha: alpha, eyeColor: '#f0f0f0' });
       // hp pips
       for (let i = 0; i < h.maxHp; i++) {
-        ctx.fillStyle = i < h.hp ? FG : '#d0d0d0';
-        ctx.fillRect(sx + 6 + i * 11, top - 8, 9, 4);
+        ctx.fillStyle = i < h.hp ? '#222' : '#d0d0d0';
+        ctx.fillRect(sx + 4 + i * 10, top - 8, 8, 4);
       }
-      ctx.restore();
     }
   }
 
@@ -1138,6 +1168,13 @@
   function render() {
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
     if (!game) return;
+    let sx = 0, sy = 0;
+    if (game.shakeTime > 0) {
+      const m = game.shakeMag || 4;
+      sx = rnd(-m, m); sy = rnd(-m * 0.6, m * 0.6);
+    }
+    ctx.save();
+    ctx.translate(sx, sy);
     drawClouds();
     drawGround();
     drawObstacles();
@@ -1146,6 +1183,7 @@
     drawHerd();
     drawDino();
     drawParticles();
+    ctx.restore();
     drawLives();
     drawScore();
     drawMessage();
