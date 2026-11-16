@@ -341,11 +341,11 @@
   // ---------- Explore entities ----------
   function spawnExploreObstacleAt(worldX) {
     let spawnX = worldX;
-    for (let tries = 0; tries < 6; tries++) {
+    for (let tries = 0; tries < 8; tries++) {
       const willBeBird = Math.random() < 0.18 && Math.abs(spawnX - game.playerWorldX) > 300;
       if (willBeBird) {
         // birds fly in air; avoid placing directly above pit openings for clarity
-        if (!obstacleOverlapsPit(spawnX, 46)) {
+        if (!obstacleOverlapsPit(spawnX, 46, 20)) {
           const alt = Math.random() < 0.5 ? 72 : 104;
           game.obstacles.push({ type: 'bird', worldX: spawnX, y: GROUND_Y - alt - 30, w: 46, h: 30 });
           return;
@@ -357,12 +357,13 @@
         const count = small ? (Math.random() < 0.45 ? 2 : 1) : (Math.random() < 0.30 ? 2 : 1);
         const gap = 12;
         const w = count * cw + (count - 1) * gap;
-        if (!obstacleOverlapsPit(spawnX, w)) {
+        // keep cacti away from pits
+        if (!obstacleOverlapsPit(spawnX, w, 70)) {
           game.obstacles.push({ type: 'cactus', worldX: spawnX, w, h: ch, cw, ch, count, gap });
           return;
         }
       }
-      spawnX += 90;
+      spawnX += 100;
     }
   }
 
@@ -401,9 +402,10 @@
     return null;
   }
 
-  function obstacleOverlapsPit(worldX, width) {
+  function obstacleOverlapsPit(worldX, width, margin) {
+    margin = margin == null ? 6 : margin;
     for (const p of game.pits) {
-      if (worldX < p.worldX + p.w + 6 && worldX + width > p.worldX - 6) return true;
+      if (worldX < p.worldX + p.w + margin && worldX + width > p.worldX - margin) return true;
     }
     return false;
   }
@@ -418,7 +420,7 @@
     const hp = getHostileParams();
     if (game.hostiles.length >= hp.max) return;
     let wx = Math.max(80, worldX);
-    if (obstacleOverlapsPit(wx - 20, 60)) wx += 120;
+    if (obstacleOverlapsPit(wx - 20, 60, 20)) wx += 140;
     const life = Math.floor(rnd(hp.hpMin, hp.hpMax + 0.99));
     game.hostiles.push({
       worldX: wx, y: 0, w: DINO_W, h: DINO_H, hp: life, maxHp: life,
