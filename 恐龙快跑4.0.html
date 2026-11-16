@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>恐龙跑酷 · Dino Run</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: #fafafa;
+    font-family: "Courier New", Courier, monospace;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #wrap { width: 100%; max-width: 940px; padding: 14px; }
+  canvas {
+    display: block; width: 100%; height: auto;
+    background: #fff; border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.08);
+    touch-action: manipulation; cursor: pointer;
+  }
+  .panel {
+    display: flex; gap: 14px; margin-top: 16px;
+    flex-wrap: wrap; justify-content: center;
+  }
+  .card {
+    background: #fff; border: 2px solid #efefef; border-radius: 12px;
+    padding: 9px 16px; box-shadow: 0 3px 14px rgba(0,0,0,.04);
+  }
+  .card-title {
+    font-size: 11px; color: #b0b0b0; letter-spacing: 1.5px;
+    margin-bottom: 8px; font-weight: bold;
+  }
+  .btn-row { display: flex; gap: 8px; }
+  .btn {
+    font-family: inherit; font-size: 13px; font-weight: bold;
+    padding: 7px 13px; border-radius: 8px; cursor: pointer;
+    border: 2px solid #e2e2e2; background: #fff; color: #777;
+    transition: all .15s; white-space: nowrap;
+  }
+  .btn:hover { border-color: #c0c0c0; color: #555; }
+  .btn.active { background: #535353; border-color: #535353; color: #fff; }
+  .btn.inv.active { background: #e6a817; border-color: #e6a817; color: #fff; }
+  input[type=range] { width: 150px; accent-color: #535353; cursor: pointer; display: block; }
+  #speedVal { color: #535353; font-weight: bold; }
+  .hint {
+    text-align: center; color: #aaa; font-size: 12px;
+    margin-top: 14px; line-height: 1.9; letter-spacing: .5px;
+  }
+  .kbd {
+    display: inline-block; padding: 1px 6px; border: 1.5px solid #ddd;
+    border-bottom-width: 3px; border-radius: 5px; color: #888;
+    font-size: 11px; margin: 0 1px;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="900" height="320"></canvas>
+
+  <div class="panel">
+    <div class="card">
+      <div class="card-title">难度</div>
+      <div class="btn-row">
+        <button class="btn diff" data-diff="easy">普通 · 3命</button>
+        <button class="btn diff" data-diff="normal">中等 · 2命</button>
+        <button class="btn diff" data-diff="hard">困难 · 1命</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">特殊模式</div>
+      <div class="btn-row">
+        <button class="btn inv" id="invBtn">无敌模式：关</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">速度调节 <span id="speedVal">x1.0</span></div>
+      <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1">
+    </div>
+  </div>
+
+  <div class="hint">
+    <span class="kbd">空格</span> / <span class="kbd">↑</span> / 点击画面 —— 跳跃（无敌模式下按住可一直飞）<br>
+    <span class="kbd">Shift</span> 加速 · <span class="kbd">Ctrl</span> 减速 · <span class="kbd">CapsLock</span> 快速下落
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ==================== 基础常量 ====================
+  const canvas = document.getElementById('game');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const GROUND_Y = 260;
+  const DINO_X   = 60;
+  const DINO_W   = 44;
+  const DINO_H   = 47;
+  const GRAVITY  = 0.62;
+  const JUMP_V   = -11.6;
+  const MAX_FLY  = 190;
+  const FG       = '#535353';
+
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  // ==================== 难度配置 ====================
+  // gapMin/gapMax 单位为“秒”，生成距离 = 秒 × 当前速度 × 60
+  const DIFFICULTIES = {
+    easy:   { lives: 3, baseSpeed: 6.0, gapMin: 0.65, gapMax: 1.20 },
+    normal: { lives: 2, baseSpeed: 6.8, gapMin: 0.60, gapMax: 1.10 },
+    hard:   { lives: 1, baseSpeed: 7.4, gapMin: 0.55, gapMax: 1.00 }
+  };
+
+  // ==================== 状态 ====================
+  const settings = {
+    difficulty: 'easy',
+    invincible: false,
+    speedSlider: 1
+  };
+
+  const keys = { space: false, shift: false, ctrl: false, caps: false };
+
+  let game = null;
+  let pebbles = [];
+  let best = 0;
+  try { best = parseInt(localStorage.getItem('dino_best') || '0', 10) || 0; } catch (e) { best = 0; }
+
+  const dino = { y: 0, vy: 0, jumping: false, legPhase: 0, jumpRatio: 1 };
+
+  // ==================== 像素图案 ====================
+  const PX_HEART = [
+    [0,1,1,0,1,1,0],
+    [1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1],
+    [0,1,1,1,1,1,0],
+    [0,0,1,1,1,0,0],
+    [0,0,0,1,0,0,0]
+  ];
+
+  const PX_INF = [
+    [0,1,1,0,0,0,1,1,0],
+    [1,1,1,1,0,1,1,1,1],
+    [1,1,0,1,1,1,0,1,1],
+    [1,1,1,1,0,1,1,1,1],
+    [0,1,1,0,0,0,1,1,0]
+  ];
+
+  function drawPixelArt(pattern, x, y, px, color) {
+    ctx.fillStyle = color;
+    for (let r = 0; r < pattern.length; r++) {
+      const row = pattern[r];
+      for (let c = 0; c < row.length; c++) {
+        if (row[c]) ctx.fillRect(x + c * px, y + r * px, px, px);
+      }
+    }
+  }
+
+  // ==================== 初始化 ====================
+  function makePebbles() {
+    pebbles = [];
+    for (let i = 0; i < 80; i++) {
+      pebbles.push({
+        x: Math.random() * 2400,
+        y: Math.random() * 14,
+        w: rnd(2, 12),
+        h: rnd(1.5, 2.5)
+      });
+    }
+  }
+
+  function restart() {
+    const cfg = DIFFICULTIES[settings.difficulty];
+    game = {
+      over: false,
+      speed: cfg.baseSpeed,
+      score: 0,
+      frame: 0,
+      groundOffset: 0,
+      obstacles: [],
+      clouds: [],
+      spawnDist: 0,
+      nextGap: 320,
+      lives: cfg.lives,
+      maxLives: cfg.lives,
+      hurtTimer: 0
+    };
+    dino.y = 0;
+    dino.vy = 0;
+    dino.jumping = false;
+    dino.legPhase = 0;
+    dino.jumpRatio = 1;
+
+    for (let i = 0; i < 4; i++) {
+      game.clouds.push({ x: rnd(0, W), y: rnd(30, 150), s: rnd(0.5, 1) });
+    }
+  }
+
+  function calcGap() {
+    const cfg = DIFFICULTIES[settings.difficulty];
+    const seconds = rnd(cfg.gapMin, cfg.gapMax);
+    return seconds * game.speed * 60;
+  }
+
+  // ==================== 跳跃力度缩放 ====================
+  // 让跳跃的初速度与重力同时按速度比例缩放：
+  //   滞空时间不变，跳跃高度与水平跨度随速度增大，手感与画面速度匹配
+  function computeJumpRatio() {
+    const cfg = DIFFICULTIES[settings.difficulty];
+    const r = game.speed / cfg.baseSpeed;
+    return Math.max(0.75, Math.min(1.6, r));
+  }
+
+  // ==================== 碰撞盒 ====================
+  function dinoBox() {
+    const top = GROUND_Y - dino.y - DINO_H;
+    return { x: DINO_X + 6, y: top + 6, w: 32, h: DINO_H - 12 };
+  }
+
+  function obstacleBox(o) {
+    if (o.type === 'cactus') {
+      return { x: o.x + 3, y: GROUND_Y - o.h + 3, w: o.w - 6, h: o.h - 3 };
+    }
+    return { x: o.x + 10, y: o.y + 8, w: o.w - 20, h: o.h - 16 };
+  }
+
+  function collides(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x &&
+           a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // ==================== 生成障碍 ====================
+  function spawnObstacle() {
+    if (game.score > 350 && Math.random() < 0.22) {
+      const alt = Math.random() < 0.5 ? 72 : 104;
+      game.obstacles.push({
+        type: 'bird',
+        x: W + 30,
+        y: GROUND_Y - alt - 30,
+        w: 46,
+        h: 30
+      });
+      return;
+    }
+
+    const small = Math.random() < 0.55;
+    const cw = small ? 18 : 26;
+    const ch = small ? 36 : 52;
+    const count = small
+      ? (Math.random() < 0.45 ? 2 : 1)
+      : (Math.random() < 0.30 ? 2 : 1);
+    const gap = 12;
+
+    game.obstacles.push({
+      type: 'cactus',
+      x: W + 30,
+      w: count * cw + (count - 1) * gap,
+      h: ch,
+      cw: cw,
+      ch: ch,
+      count: count,
+      gap: gap
+    });
+  }
+
+  // ==================== 受伤 / 结束 ====================
+  function hitObstacle(o) {
+    o.dead = true;
+    game.lives--;
+    if (game.lives <= 0) {
+      gameOver();
+    } else {
+      game.hurtTimer = 2.0;
+    }
+  }
+
+  function gameOver() {
+    game.over = true;
+    game.lives = 0;
+    game.hurtTimer = 0;
+    const s = Math.floor(game.score);
+    if (s > best) {
+      best = s;
+      try { localStorage.setItem('dino_best', String(best)); } catch (e) {}
+    }
+  }
+
+  // ==================== 更新 ====================
+  function update(dt) {
+    if (game.over) return;
+
+    const f = dt * 60;
+    const cfg = DIFFICULTIES[settings.difficulty];
+
+    // ---------- 速度：由难度 + 滑块 + 按键决定，不随时间增长 ----------
+    let mult = settings.speedSlider;
+    if (keys.shift) mult *= 1.8;
+    if (keys.ctrl)  mult *= 0.45;
+    game.speed = Math.max(2, Math.min(30, cfg.baseSpeed * mult));
+
+    game.frame += f;
+    game.score += game.speed * f * 0.03;
+
+    if (game.hurtTimer > 0) {
+      game.hurtTimer = Math.max(0, game.hurtTimer - dt);
+    }
+
+    // ---------- 恐龙物理 ----------
+    if (settings.invincible) {
+      // 飞行模式：实时跟随速度调整升降幅度
+      const r = Math.max(0.8, Math.min(1.8, game.speed / cfg.baseSpeed));
+      if (keys.caps) {
+        dino.vy = 10 * r;
+      } else if (keys.space) {
+        dino.vy = -7.5 * r;
+      } else {
+        dino.vy = Math.min(dino.vy + GRAVITY * f, 13);
+      }
+      dino.y -= dino.vy * f;
+      if (dino.y > MAX_FLY) { dino.y = MAX_FLY; if (dino.vy < 0) dino.vy = 0; }
+      if (dino.y < 0)       { dino.y = 0; dino.vy = 0; }
+      dino.jumping = dino.y > 1;
+    } else if (dino.jumping) {
+      const gMul = keys.caps ? 4.2 : 1;
+      dino.vy += GRAVITY * dino.jumpRatio * gMul * f;
+      dino.y  -= dino.vy * f;
+      if (dino.y <= 0) {
+        dino.y = 0;
+        dino.vy = 0;
+        dino.jumping = false;
+      }
+    } else {
+      dino.legPhase = Math.floor(game.frame / 7) % 2;
+    }
+
+    // ---------- 地面滚动 ----------
+    game.groundOffset += game.speed * f;
+
+    // ---------- 云朵 ----------
+    for (const c of game.clouds) c.x -= game.speed * 0.25 * f * c.s;
+    game.clouds = game.clouds.filter(c => c.x > -120);
+    if (game.clouds.length < 5 && Math.random() < 0.012 * f) {
+      game.clouds.push({ x: W + 60, y: rnd(30, 160), s: rnd(0.5, 1) });
+    }
+
+    // ---------- 生成障碍 ----------
+    game.spawnDist += game.speed * f;
+    if (game.spawnDist >= game.nextGap) {
+      spawnObstacle();
+      game.spawnDist = 0;
+      game.nextGap = calcGap();
+    }
+
+    // ---------- 障碍移动 ----------
+    for (const o of game.obstacles) o.x -= game.speed * f;
+    game.obstacles = game.obstacles.filter(o => !o.dead && o.x + o.w > -80);
+
+    // ---------- 碰撞 ----------
+    if (!settings.invincible && game.hurtTimer <= 0) {
+      const db = dinoBox();
+      for (const o of game.obstacles) {
+        if (collides(db, obstacleBox(o))) { hitObstacle(o); break; }
+      }
+    }
+  }
+
+  // ==================== 绘制 ====================
+  function drawCloud(x, y, s) {
+    ctx.beginPath();
+    ctx.arc(x,          y,          14 * s, 0, Math.PI * 2);
+    ctx.arc(x + 16 * s, y - 7 * s,  18 * s, 0, Math.PI * 2);
+    ctx.arc(x + 36 * s, y,          13 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawClouds() {
+    ctx.fillStyle = '#dcdcdc';
+    for (const c of game.clouds) drawCloud(c.x, c.y, c.s);
+  }
+
+  function drawGround() {
+    ctx.strokeStyle = FG;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND_Y + 1);
+    ctx.lineTo(W, GROUND_Y + 1);
+    ctx.stroke();
+
+    ctx.fillStyle = '#cfcfcf';
+    const off = game.groundOffset % 2400;
+    for (let i = 0; i < pebbles.length; i++) {
+      const p = pebbles[i];
+      let x = p.x - off;
+      if (x < -30) x += 2400;
+      if (x > W + 30) continue;
+      ctx.fillRect(x, GROUND_Y + 9 + p.y, p.w, p.h);
+    }
+  }
+
+  function drawDino() {
+    const x = DINO_X;
+    const footY = GROUND_Y - dino.y;
+    const top = footY - DINO_H;
+
+    ctx.save();
+
+    if (settings.invincible) {
+      const g = ctx.createRadialGradient(x + 22, top + 24, 6, x + 22, top + 24, 48);
+      g.addColorStop(0, 'rgba(255, 200, 60, 0.38)');
+      g.addColorStop(1, 'rgba(255, 200, 60, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x + 22, top + 24, 48, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.92;
+    } else if (game.hurtTimer > 0) {
+      ctx.globalAlpha = (Math.floor(game.frame / 5) % 2 === 0) ? 0.22 : 0.75;
+    }
+
+    ctx.fillStyle = FG;
+
+    // 尾巴
+    ctx.beginPath();
+    ctx.moveTo(x + 11, top + 20);
+    ctx.lineTo(x + 0,  top + 15);
+    ctx.lineTo(x + 3,  top + 30);
+    ctx.lineTo(x + 12, top + 32);
+    ctx.closePath();
+    ctx.fill();
+
+    // 身体 / 脖子 / 头 / 手
+    ctx.fillRect(x + 8, top + 21, 25, 17);
+    ctx.fillRect(x + 24, top + 9, 12, 16);
+    ctx.fillRect(x + 26, top + 1, 18, 16);
+    ctx.fillRect(x + 30, top + 26, 9, 4);
+
+    // 腿
+    let l1, l2;
+    if (dino.jumping)        { l1 = 8; l2 = 6; }
+    else if (dino.legPhase)  { l1 = 6; l2 = 9; }
+    else                     { l1 = 9; l2 = 6; }
+    ctx.fillRect(x + 11, top + 38, 7, l1);
+    ctx.fillRect(x + 23, top + 38, 7, l2);
+
+    // 眼睛
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + 37, top + 5, 5, 5);
+
+    ctx.restore();
+  }
+
+  function drawCactus(x, w, h) {
+    const base = GROUND_Y;
+    const tw   = Math.max(7, w * 0.40);
+    const tx   = x + (w - tw) / 2;
+    const armW = Math.max(5, w * 0.32);
+    const armY = base - h * 0.60;
+
+    ctx.fillStyle = FG;
+    ctx.fillRect(tx, base - h, tw, h);
+
+    const laX = tx - armW * 1.6;
+    ctx.fillRect(laX, armY - h * 0.28, armW, h * 0.28 + armW);
+    ctx.fillRect(laX, armY, (tx + tw * 0.5) - laX, armW);
+
+    const raX = tx + tw + armW * 0.6;
+    ctx.fillRect(raX, armY - h * 0.38, armW, h * 0.38 + armW);
+    ctx.fillRect(tx + tw * 0.5, armY, (raX + armW) - (tx + tw * 0.5), armW);
+  }
+
+  function drawBird(o) {
+    const x = o.x, y = o.y, w = o.w, h = o.h;
+    const cx = x + w * 0.45;
+    const cy = y + h * 0.5;
+
+    ctx.fillStyle = FG;
+
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, w * 0.32, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x + w * 0.78, y + h * 0.34, h * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.88, y + h * 0.28);
+    ctx.lineTo(x + w + 10,   y + h * 0.38);
+    ctx.lineTo(x + w * 0.88, y + h * 0.52);
+    ctx.closePath();
+    ctx.fill();
+
+    const up = Math.floor(game.frame / 9) % 2 === 0;
+    ctx.beginPath();
+    if (up) {
+      ctx.moveTo(cx - w * 0.15, cy - h * 0.10);
+      ctx.lineTo(cx + w * 0.10, y - h * 0.40);
+      ctx.lineTo(cx + w * 0.25, cy - h * 0.05);
+    } else {
+      ctx.moveTo(cx - w * 0.15, cy + h * 0.10);
+      ctx.lineTo(cx + w * 0.10, y + h * 1.35);
+      ctx.lineTo(cx + w * 0.25, cy + h * 0.05);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + w * 0.76, y + h * 0.22, 5, 5);
+  }
+
+  function drawObstacles() {
+    for (const o of game.obstacles) {
+      if (o.type === 'cactus') {
+        for (let i = 0; i < o.count; i++) {
+          drawCactus(o.x + i * (o.cw + o.gap), o.cw, o.ch);
+        }
+      } else {
+        drawBird(o);
+      }
+    }
+  }
+
+  // ---------- 像素风生命值 ----------
+  function drawLives() {
+    const baseX = 24;
+    const baseY = 18;
+
+    if (settings.invincible) {
+      drawPixelArt(PX_INF, baseX, baseY, 3.2, '#e6a817');
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 15px "Courier New", monospace';
+      ctx.fillStyle = '#e6a817';
+      ctx.fillText('无敌', baseX + 9 * 3.2 + 12, baseY + 8);
+      return;
+    }
+
+    const px = 3.2;
+    const stepX = 7 * px + 12;
+    const blink = game.hurtTimer > 0 && Math.floor(game.frame / 6) % 2 === 0;
+
+    for (let i = 0; i < game.maxLives; i++) {
+      const filled = i < game.lives;
+      let color = filled ? '#e05a5a' : '#ececec';
+      if (filled && blink) color = '#f3b8b8';
+      drawPixelArt(PX_HEART, baseX + i * stepX, baseY, px, color);
+    }
+  }
+
+  function drawScore() {
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillStyle = '#8a8a8a';
+    ctx.fillText(String(Math.floor(game.score)).padStart(5, '0'), W - 24, 22);
+
+    ctx.font = 'bold 14px "Courier New", monospace';
+    if (best > 0) {
+      ctx.fillStyle = '#c8c8c8';
+      ctx.fillText('HI ' + String(best).padStart(5, '0'), W - 24, 52);
+    }
+
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText('SPD ' + game.speed.toFixed(1), W - 24, 74);
+  }
+
+  function drawGameOver() {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = FG;
+    ctx.font = 'bold 32px "Courier New", monospace';
+    ctx.fillText('G A M E   O V E R', W / 2, H / 2 - 40);
+
+    ctx.font = 'bold 17px "Courier New", monospace';
+    ctx.fillText('按 空格 或 点击 重新开始', W / 2, H / 2 + 12);
+
+    if (best > 0) {
+      ctx.font = 'bold 15px "Courier New", monospace';
+      ctx.fillStyle = '#a8a8a8';
+      ctx.fillText('最高分  ' + best, W / 2, H / 2 + 48);
+    }
+  }
+
+  function render() {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+
+    drawClouds();
+    drawGround();
+    drawObstacles();
+    drawDino();
+    drawLives();
+    drawScore();
+
+    if (game.over) drawGameOver();
+  }
+
+  // ==================== 输入 ====================
+  function jumpPress() {
+    if (game.over) { restart(); return; }
+    if (settings.invincible) return;
+    if (!dino.jumping) {
+      dino.jumping = true;
+      dino.jumpRatio = computeJumpRatio();
+      dino.vy = JUMP_V * dino.jumpRatio;
+    }
+  }
+
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+      e.preventDefault();
+      if (game.over) { restart(); return; }
+      if (keys.space) return;
+      keys.space = true;
+      jumpPress();
+      return;
+    }
+    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { keys.shift = true; return; }
+    if (e.code === 'ControlLeft' || e.code === 'ControlRight') { keys.ctrl = true; return; }
+    if (e.code === 'CapsLock') { keys.caps = true; return; }
+  }, { passive: false });
+
+  window.addEventListener('keyup', function (e) {
+    if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+      keys.space = false; return;
+    }
+    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { keys.shift = false; return; }
+    if (e.code === 'ControlLeft' || e.code === 'ControlRight') { keys.ctrl = false; return; }
+    if (e.code === 'CapsLock') { keys.caps = false; return; }
+  });
+
+  canvas.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    if (game.over) { restart(); return; }
+    keys.space = true;
+    jumpPress();
+  }, { passive: false });
+
+  window.addEventListener('pointerup',     function () { keys.space = false; });
+  window.addEventListener('pointercancel', function () { keys.space = false; });
+  window.addEventListener('blur', function () {
+    keys.space = false; keys.shift = false; keys.ctrl = false; keys.caps = false;
+  });
+
+  // ==================== 控制面板 ====================
+  const diffBtns = document.querySelectorAll('.diff');
+
+  function syncDiffButtons() {
+    diffBtns.forEach(b => b.classList.toggle('active', b.dataset.diff === settings.difficulty));
+  }
+
+  diffBtns.forEach(b => {
+    b.addEventListener('click', function () {
+      settings.difficulty = b.dataset.diff;
+      syncDiffButtons();
+      restart();
+      b.blur();
+    });
+  });
+
+  const invBtn = document.getElementById('invBtn');
+
+  function syncInvBtn() {
+    invBtn.classList.toggle('active', settings.invincible);
+    invBtn.textContent = '无敌模式：' + (settings.invincible ? '开' : '关');
+  }
+
+  invBtn.addEventListener('click', function () {
+    settings.invincible = !settings.invincible;
+    syncInvBtn();
+    restart();
+    invBtn.blur();
+  });
+
+  const speedInput = document.getElementById('speed');
+  const speedVal   = document.getElementById('speedVal');
+
+  speedInput.addEventListener('input', function () {
+    settings.speedSlider = parseFloat(speedInput.value);
+    speedVal.textContent = 'x' + settings.speedSlider.toFixed(1);
+  });
+
+  // ==================== 主循环 ====================
+  let lastTime = 0;
+
+  function loop(ts) {
+    let dt = (ts - lastTime) / 1000;
+    lastTime = ts;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0)    dt = 0;
+
+    update(dt);
+    render();
+
+    requestAnimationFrame(loop);
+  }
+
+  // ==================== 启动 ====================
+  makePebbles();
+  syncDiffButtons();
+  syncInvBtn();
+  restart();
+  lastTime = performance.now();
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
