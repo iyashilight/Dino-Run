@@ -215,9 +215,9 @@
       pits: [],
       particles: [],
       shootCooldown: 0,
-      enemySpawnDist: 0,
+      nextHostileX: 900,
       pitSpawnX: 600,
-      herd: { phase: 'idle', timer: rnd(12, 22), x: 0, speed: 0, width: 0, height: 0, warned: 0 },
+      herd: { phase: 'idle', timer: rnd(12, 22), x: 0, speed: 0, width: 0, height: 0, warned: 0, members: [] },
       message: '',
       messageTimer: 0,
       shakeTime: 0,
@@ -383,9 +383,10 @@
   }
   function getPitUnderPlayer() {
     const px = game.playerWorldX;
-    const centerX = px + 22;
+    const footX1 = px + 10, footX2 = px + 34;
     for (const p of game.pits) {
-      if (centerX > p.worldX + 8 && centerX < p.worldX + p.w - 8) return p;
+      // while low/in pit, foot overlap keeps player in pit so they must jump to exit
+      if (footX2 > p.worldX + 4 && footX1 < p.worldX + p.w - 4) return p;
     }
     return null;
   }
@@ -397,22 +398,18 @@
     return false;
   }
 
-  function spawnHostile() {
-    if (game.hostiles.length >= (settings.difficulty === 'hard' ? 2 : 1)) return;
-    const side = Math.random() < 0.75 ? 1 : -1;
-    let wx = game.playerWorldX + side * rnd(260, 420);
-    wx = Math.max(80, wx);
+  function spawnHostileAt(worldX) {
+    if (game.hostiles.length >= (settings.difficulty === 'hard' ? 3 : 2)) return;
+    let wx = Math.max(80, worldX);
     if (obstacleOverlapsPit(wx - 20, 60)) wx += 120;
     const hp = Math.floor(rnd(1, 4.99)); // 1-4 random
-    const shootBase = rnd(0.7, 2.2);
-    const shootVar = rnd(0.4, 1.4);
     game.hostiles.push({
       worldX: wx, y: 0, w: DINO_W, h: DINO_H, hp: hp, maxHp: hp,
-      facing: wx < game.playerWorldX ? 1 : -1,
-      shootCd: rnd(0.5, 1.5),
-      shootBase: shootBase,
-      shootVar: shootVar,
-      moveSpeed: rnd(0.4, 1.4),
+      facing: -1,
+      shootCd: rnd(0.6, 1.6),
+      shootBase: rnd(0.7, 2.2),
+      shootVar: rnd(0.4, 1.4),
+      moveSpeed: rnd(0.5, 1.5),
       hitFlash: 0, dead: false
     });
   }
@@ -481,16 +478,20 @@
     game.herd.height = 180;
     game.herd.x = game.cameraX + W + 120;
     game.herd.timer = 0;
-    // randomize members
-    const count = 5 + Math.floor(rnd(0, 3)); // 5-7
+    // randomize members with overlapping positions
+    const count = 6 + Math.floor(rnd(0, 3)); // 6-8
     game.herd.members = [];
     for (let i = 0; i < count; i++) {
       game.herd.members.push({
-        scale: rnd(1.6, 3.4),
-        shade: Math.random() < 0.5 ? '#6a6a6a' : '#7a7a7a',
+        ox: rnd(0, game.herd.width - 120),
+        oy: rnd(0, 14),
+        scale: rnd(1.7, 3.5),
+        shade: ['#666', '#707070', '#787878', '#5f5f5f'][Math.floor(rnd(0, 4))],
         legPhase: Math.random() < 0.5 ? 0 : 1
       });
     }
+    // sort by ox for depth-ish layering
+    game.herd.members.sort((a, b) => a.ox - b.ox);
     game.shakeTime = 0.8;
     game.shakeMag = 7;
   }
@@ -586,11 +587,11 @@
     }
     // pits
     while (game.pitSpawnX < game.cameraX + W + 900) spawnPit();
-    // hostiles
-    game.enemySpawnDist += Math.abs(game.playerWorldX - prevX);
-    if (game.enemySpawnDist > rnd(450, 800) && game.hostiles.filter(h => !h.dead).length < (settings.difficulty === 'hard' ? 2 : 1)) {
-      spawnHostile();
-      game.enemySpawnDist = 0;
+    // hostiles: appear with exploration progress, walking in from the right
+    if (game.maxWorldX + 350 >= game.nextHostileX) {
+      const spawnX = Math.max(game.nextHostileX, game.cameraX + W + 60);
+      spawnHostileAt(spawnX);
+      game.nextHostileX += rnd(700, 1100);
     }
     // herd timer
     updateHerd(dt);
@@ -775,8 +776,12 @@
       if (h.timer <= 0) startHerdActive();
     } else if (h.phase === 'active') {
       h.x -= h.speed * dt * 60; // move left in world
-      // end when fully past left of camera
-      if (h.x + h.width < game.cameraX - 100) endHerd();
+      // subtle ongoing rumble while herd on screen
+      if (h.x < game.cameraX + W && h.x + h.width > game.cameraX) {
+        game.shakeTime = Math.max(game.shakeTime, 0.05);
+        game.shakeMag = Math.max(game.shakeMag || 0, 2.5);
+      }
+      if (h.x + h.width < game.cameraX - 120) endHerd();
     }
   }
 
@@ -1005,14 +1010,18 @@
       if (p.dead) continue;
       const sx = p.worldX - game.cameraX;
       if (sx < -20 || sx > W + 20) continue;
-      ctx.beginPath();
-      ctx.fillStyle = p.owner === 'player' ? '#8a8a8a' : '#5f5f5f';
-      ctx.arc(sx, p.y, p.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = p.owner === 'player' ? '#d6d6d6' : '#b0b0b0';
-      ctx.beginPath(); ctx.arc(sx - p.r*0.3, p.y - p.r*0.3, p.r*0.35, 0, Math.PI*2); ctx.fill();
-      ctx.strokeStyle = '#3f3f3f'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.stroke();
+      const main = p.owner === 'player' ? '#8a8a8a' : '#5f5f5f';
+      const light = p.owner === 'player' ? '#d0d0d0' : '#9a9a9a';
+      const dark = '#3f3f3f';
+      const x = Math.round(sx - 4), y = Math.round(p.y - 4);
+      // pixel fireball
+      ctx.fillStyle = main;
+      ctx.fillRect(x + 2, y, 4, 8);
+      ctx.fillRect(x, y + 2, 8, 4);
+      ctx.fillStyle = light;
+      ctx.fillRect(x + 2, y + 2, 2, 2);
+      ctx.fillStyle = dark;
+      ctx.fillRect(x + 3, y + 3, 2, 2);
     }
   }
 
@@ -1041,49 +1050,23 @@
     }
     if (h.phase !== 'active') return;
     const sx = h.x - game.cameraX;
-    // draw herd as multiple big dinos (larger, page palette)
-    const count = 6;
-    const unit = h.width / count;
-    for (let i = 0; i < count; i++) {
-      const bx = sx + i * unit;
-      if (bx > W + 180 || bx + unit < -180) continue;
-      const bh = 150 + (i % 3) * 22;
-      const bw = unit - 8;
-      const top = GROUND_Y - bh;
-      const body = i % 2 === 0 ? '#6a6a6a' : '#747474';
-      const dark = '#4f4f4f';
-      const light = '#8f8f8f';
-      // tail
-      ctx.fillStyle = dark;
-      ctx.beginPath();
-      ctx.moveTo(bx + 20, top + bh * 0.55);
-      ctx.lineTo(bx - 30, top + bh * 0.45);
-      ctx.lineTo(bx - 10, top + bh * 0.72);
-      ctx.closePath(); ctx.fill();
-      // body
-      ctx.fillStyle = body;
-      ctx.fillRect(bx + 20, top + bh * 0.38, bw - 40, bh * 0.48);
-      // back ridge
-      ctx.fillStyle = light;
-      for (let s = 0; s < 5; s++) ctx.fillRect(bx + 40 + s * (bw * 0.12), top + bh * 0.32, bw * 0.06, bh * 0.08);
-      // neck + head (facing left)
-      ctx.fillStyle = body;
-      ctx.fillRect(bx + 20, top + bh * 0.18, bw * 0.22, bh * 0.28);
-      ctx.fillRect(bx - 5, top + bh * 0.05, bw * 0.32, bh * 0.22);
-      ctx.fillStyle = dark;
-      ctx.fillRect(bx - 18, top + bh * 0.12, 20, bh * 0.08);
-      // eye
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(bx + 2, top + bh * 0.11, 10, 10);
-      ctx.fillStyle = dark; ctx.fillRect(bx + 4, top + bh * 0.13, 5, 5);
-      // legs
-      ctx.fillStyle = dark;
-      const legW = Math.max(18, bw * 0.12);
-      ctx.fillRect(bx + bw * 0.25, GROUND_Y - bh * 0.22, legW, bh * 0.22);
-      ctx.fillRect(bx + bw * 0.62, GROUND_Y - bh * 0.22, legW, bh * 0.22);
+    const members = h.members || [];
+    for (let i = 0; i < members.length; i++) {
+      const m = members[i];
+      const bx = sx + (m.ox || 0);
+      if (bx > W + 260 || bx + 200 < -260) continue;
+      const scale = m.scale || 2.4;
+      const bh = DINO_H * scale;
+      const top = GROUND_Y - bh + (m.oy || 0);
+      const legPhase = (Math.floor(game.frame / 6) + i) % 2;
+      ctx.save();
+      ctx.translate(bx, top);
+      ctx.scale(scale, scale);
+      drawDinoSprite(0, 0, -1, false, legPhase, m.shade || '#6f6f6f', { alpha: 1, eyeColor: '#f2f2f2' });
+      ctx.restore();
       // dust
-      ctx.fillStyle = 'rgba(170,170,170,0.35)';
-      ctx.fillRect(bx - 20, GROUND_Y - 10 - (i%2)*8, 28, 8);
-      ctx.fillRect(bx + 10, GROUND_Y - 6 - ((i+1)%2)*6, 22, 6);
+      ctx.fillStyle = 'rgba(170,170,170,0.30)';
+      ctx.fillRect(bx - 10, GROUND_Y - 10 - (i%2)*6, 22, 7);
     }
   }
 
