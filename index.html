@@ -505,11 +505,9 @@
     let moveV = dir * moveSpeedBase;
     // pit slowdown / fall-in handling
     const pitUnder = getPitUnderPlayer();
-    const inPit = !!(pitUnder && dino.y <= pitUnder.d + 1);
-    if (pitUnder) {
-      if (dino.y < pitUnder.d) dino.y = pitUnder.d; // sink into pit bottom level reference
-      if (inPit) moveV *= 0.45; // hard to move inside
-    }
+    const groundBase = pitUnder ? -pitUnder.d : 0;
+    const inPitBottom = !!(pitUnder && dino.y <= groundBase + 2);
+    if (inPitBottom) moveV *= 0.45; // hard to move inside
     const prevX = game.playerWorldX;
     game.playerWorldX += moveV * f;
     if (game.playerWorldX < 40) game.playerWorldX = 40;
@@ -518,9 +516,11 @@
 
     // camera
     game.cameraX = Math.max(0, game.playerWorldX - EXPLORE_SCREEN_X);
-    // keep player from walking out right/left too far relative to camera implicitly ok
 
-    updateDinoVertical(dt, f, cfg, inPit ? (pitUnder ? pitUnder.d : 0) : 0);
+    // re-evaluate pit after horizontal move
+    const pitUnder2 = getPitUnderPlayer();
+    const groundBase2 = pitUnder2 ? -pitUnder2.d : 0;
+    updateDinoVertical(dt, f, cfg, groundBase2);
 
     // clouds
     updateCloudsExplore(f);
@@ -552,13 +552,9 @@
     updateHostiles(dt, f);
     // projectiles
     updateProjectiles(dt, f);
-    // particles
-    updateParticles(dt, f);
+    // particles (also updated in outer loop for death screen, but harmless)
 
     // collisions with obstacles (cactus/bird)
-    if (!settings.invincible && game.hurtTimer <= 0 && game.herd.phase !== 'active' || (game.herd.phase === 'active' && !isPlayerSheltered())) {
-      // normal obstacle collision (skip if trampled this frame handled separately)
-    }
     if (!settings.invincible && game.hurtTimer <= 0) {
       const db = dinoBox();
       for (const o of game.obstacles) {
@@ -578,8 +574,8 @@
     game.projectiles = game.projectiles.filter(p => !p.dead && p.worldX > game.cameraX - 120 && p.worldX < game.cameraX + W + 120 && p.y > -40 && p.y < H + 40);
   }
 
-  function updateDinoVertical(dt, f, cfg, pitFloor) {
-    pitFloor = pitFloor || 0;
+  function updateDinoVertical(dt, f, cfg, groundBase) {
+    groundBase = groundBase || 0;
     if (settings.invincible) {
       const r = clamp(game.speed / cfg.baseSpeed, 0.8, 1.8);
       if (keys.caps) dino.vy = 10 * r;
@@ -587,21 +583,21 @@
       else dino.vy = Math.min(dino.vy + GRAVITY * f, 13);
       dino.y -= dino.vy * f;
       if (dino.y > MAX_FLY) { dino.y = MAX_FLY; if (dino.vy < 0) dino.vy = 0; }
-      if (dino.y < pitFloor) { dino.y = pitFloor; dino.vy = 0; }
-      dino.jumping = dino.y > pitFloor + 1;
+      if (dino.y < groundBase) { dino.y = groundBase; dino.vy = 0; }
+      dino.jumping = dino.y > groundBase + 1;
     } else if (dino.jumping) {
       const gMul = keys.caps ? 4.2 : 1;
       dino.vy += GRAVITY * dino.jumpHang * gMul * f;
       dino.y -= dino.vy * f;
-      if (dino.y <= pitFloor) { dino.y = pitFloor; dino.vy = 0; dino.jumping = false; }
+      if (dino.y <= groundBase) { dino.y = groundBase; dino.vy = 0; dino.jumping = false; }
     } else {
       // standing: can fall into pit if above pit floor
-      if (dino.y > pitFloor) {
+      if (dino.y > groundBase + 0.5) {
         dino.jumping = true;
         dino.vy = 0;
       } else {
         dino.legPhase = Math.floor(game.frame / 7) % 2;
-        dino.y = pitFloor;
+        dino.y = groundBase;
       }
     }
   }
@@ -715,8 +711,8 @@
   function isPlayerSheltered() {
     const pit = getPitUnderPlayer();
     if (!pit) return false;
-    // sheltered if inside pit horizontally and low enough
-    return dino.y >= pit.d - 2;
+    // sheltered if inside pit and down at pit bottom
+    return dino.y <= -pit.d + 3;
   }
 
   function updateHerd(dt) {
@@ -769,7 +765,8 @@
 
   function update(dt) {
     if (!game) return;
-    if (game.mode === 'explore') updateParticles(dt, dt * 60); // let death particles play on end screen
+    // let death/explosion particles animate on end screen
+    if (game.particles && game.particles.length) updateParticles(dt, dt * 60);
     if (!game.started || game.over || game.paused) return;
     if (game.mode === 'explore') updateExplore(dt);
     else updateRunner(dt);
@@ -792,21 +789,42 @@
   }
 
   function drawGround() {
-    ctx.strokeStyle = FG; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(0, GROUND_Y + 1); ctx.lineTo(W, GROUND_Y + 1); ctx.stroke();
-
-    // pits (explore)
+    // pits (explore) - draw depressions first
     if (game.mode === 'explore') {
       for (const p of game.pits) {
         const sx = p.worldX - game.cameraX;
-        if (sx > W + 50 || sx + p.w < -50) continue;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(sx, GROUND_Y + 1, p.w, p.d + 30);
-        ctx.fillStyle = '#e6e6e6';
-        ctx.fillRect(sx, GROUND_Y + 1, p.w, p.d);
-        ctx.strokeStyle = '#cfcfcf';
+        if (sx > W + 60 || sx + p.w < -60) continue;
+        // pit interior
+        ctx.fillStyle = '#f0f0f0';
+        ctx.fillRect(sx, GROUND_Y + 1, p.w, p.d + 40);
+        ctx.fillStyle = '#e3e3e3';
+        ctx.fillRect(sx + 3, GROUND_Y + 6, p.w - 6, p.d - 2);
+        // depth shading
+        ctx.fillStyle = '#d8d8d8';
+        ctx.fillRect(sx, GROUND_Y + p.d - 4, p.w, 6);
+        ctx.strokeStyle = '#c8c8c8';
+        ctx.lineWidth = 1.5;
         ctx.strokeRect(sx, GROUND_Y + 1, p.w, p.d);
-        ctx.strokeStyle = FG;
+      }
+    }
+
+    ctx.strokeStyle = FG; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, GROUND_Y + 1); ctx.lineTo(W, GROUND_Y + 1); ctx.stroke();
+    // mask ground line over pits so opening looks continuous
+    if (game.mode === 'explore') {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      for (const p of game.pits) {
+        const sx = p.worldX - game.cameraX;
+        if (sx > W + 60 || sx + p.w < -60) continue;
+        ctx.beginPath(); ctx.moveTo(sx + 1, GROUND_Y + 1); ctx.lineTo(sx + p.w - 1, GROUND_Y + 1); ctx.stroke();
+      }
+      ctx.strokeStyle = '#bdbdbd'; ctx.lineWidth = 2;
+      for (const p of game.pits) {
+        const sx = p.worldX - game.cameraX;
+        if (sx > W + 60 || sx + p.w < -60) continue;
+        ctx.beginPath(); ctx.moveTo(sx, GROUND_Y + 1); ctx.lineTo(sx, GROUND_Y + 1 + 8); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx + p.w, GROUND_Y + 1); ctx.lineTo(sx + p.w, GROUND_Y + 1 + 8); ctx.stroke();
       }
     }
 
@@ -817,13 +835,11 @@
       let x = p.x - off;
       if (x < -30) x += 3000;
       if (x > W + 30) continue;
-      const sx = x;
-      // don't draw pebbles inside pit
       if (game.mode === 'explore') {
-        const wx = sx + game.cameraX;
+        const wx = x + game.cameraX;
         if (isInPitRange(wx, wx + p.w)) continue;
       }
-      ctx.fillRect(sx, GROUND_Y + 9 + p.y, p.w, p.h);
+      ctx.fillRect(x, GROUND_Y + 9 + p.y, p.w, p.h);
     }
   }
 
@@ -916,23 +932,39 @@
       if (sx < -80 || sx > W + 80) continue;
       const top = GROUND_Y - h.y - h.h;
       ctx.save();
-      if (h.hitFlash > 0) ctx.globalAlpha = 0.6;
-      ctx.fillStyle = '#6b8e5a';
-      // simple hostile dino
-      ctx.fillRect(sx + 6, top + 18, 26, 18);
+      if (h.hitFlash > 0) ctx.globalAlpha = 0.55;
+      const body = '#7a7a7a', dark = '#5f5f5f', light = '#9a9a9a';
+      // tail
+      ctx.fillStyle = dark;
+      if (h.facing > 0) ctx.fillRect(sx - 2, top + 18, 10, 8); else ctx.fillRect(sx + 34, top + 18, 10, 8);
+      // body
+      ctx.fillStyle = body;
+      ctx.fillRect(sx + 6, top + 16, 28, 18);
+      // neck/head
       if (h.facing > 0) {
-        ctx.fillRect(sx + 24, top + 8, 12, 14); ctx.fillRect(sx + 28, top + 0, 14, 14);
-        ctx.fillStyle = '#f2d24b'; ctx.fillRect(sx + 37, top + 4, 4, 4); // eye
+        ctx.fillRect(sx + 24, top + 6, 12, 14);
+        ctx.fillRect(sx + 30, top + 0, 14, 14);
+        ctx.fillStyle = light; ctx.fillRect(sx + 32, top + 2, 6, 4);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(sx + 39, top + 4, 4, 4);
+        ctx.fillStyle = dark; ctx.fillRect(sx + 40, top + 5, 2, 2);
       } else {
-        ctx.fillRect(sx + 6, top + 8, 12, 14); ctx.fillRect(sx + 0, top + 0, 14, 14);
-        ctx.fillStyle = '#f2d24b'; ctx.fillRect(sx + 1, top + 4, 4, 4);
+        ctx.fillRect(sx + 6, top + 6, 12, 14);
+        ctx.fillRect(sx - 2, top + 0, 14, 14);
+        ctx.fillStyle = light; ctx.fillRect(sx + 4, top + 2, 6, 4);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(sx - 1, top + 4, 4, 4);
+        ctx.fillStyle = dark; ctx.fillRect(sx + 0, top + 5, 2, 2);
       }
-      ctx.fillStyle = '#6b8e5a';
       // legs
-      ctx.fillRect(sx + 10, top + 36, 6, 8); ctx.fillRect(sx + 24, top + 36, 6, 8);
+      ctx.fillStyle = dark;
+      ctx.fillRect(sx + 10, top + 34, 7, 10); ctx.fillRect(sx + 23, top + 34, 7, 10);
+      // spikes/back detail
+      ctx.fillStyle = light;
+      ctx.fillRect(sx + 12, top + 14, 4, 3); ctx.fillRect(sx + 19, top + 13, 4, 3); ctx.fillRect(sx + 26, top + 14, 4, 3);
       // hp pips
-      ctx.fillStyle = '#d95c5c';
-      for (let i = 0; i < h.hp; i++) ctx.fillRect(sx + 8 + i * 10, top - 8, 8, 4);
+      for (let i = 0; i < h.maxHp; i++) {
+        ctx.fillStyle = i < h.hp ? FG : '#d0d0d0';
+        ctx.fillRect(sx + 6 + i * 11, top - 8, 9, 4);
+      }
       ctx.restore();
     }
   }
@@ -944,11 +976,13 @@
       const sx = p.worldX - game.cameraX;
       if (sx < -20 || sx > W + 20) continue;
       ctx.beginPath();
-      ctx.fillStyle = p.owner === 'player' ? '#4aa3df' : '#e86a2c';
+      ctx.fillStyle = p.owner === 'player' ? '#8a8a8a' : '#5f5f5f';
       ctx.arc(sx, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = p.owner === 'player' ? '#cfefff' : '#ffd1a6';
+      ctx.fillStyle = p.owner === 'player' ? '#d6d6d6' : '#b0b0b0';
       ctx.beginPath(); ctx.arc(sx - p.r*0.3, p.y - p.r*0.3, p.r*0.35, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#3f3f3f'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.stroke();
     }
   }
 
@@ -970,31 +1004,56 @@
     const h = game.herd;
     if (h.phase === 'warning') {
       ctx.save();
-      const blink = Math.floor(game.frame / 10) % 2 === 0;
-      ctx.fillStyle = blink ? 'rgba(180, 80, 60, 0.12)' : 'rgba(180, 80, 60, 0.05)';
+      const blink = Math.floor(game.frame / 8) % 2 === 0;
+      ctx.fillStyle = blink ? 'rgba(120, 120, 120, 0.10)' : 'rgba(120, 120, 120, 0.04)';
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
     }
     if (h.phase !== 'active') return;
     const sx = h.x - game.cameraX;
-    // draw herd as multiple big dinos
-    const count = 7;
+    // draw herd as multiple big dinos (larger, page palette)
+    const count = 6;
     const unit = h.width / count;
     for (let i = 0; i < count; i++) {
       const bx = sx + i * unit;
-      if (bx > W + 120 || bx + unit < -120) continue;
-      const bh = 90 + (i % 3) * 18;
+      if (bx > W + 180 || bx + unit < -180) continue;
+      const bh = 150 + (i % 3) * 22;
+      const bw = unit - 8;
       const top = GROUND_Y - bh;
-      ctx.fillStyle = '#5b5b5b';
-      ctx.fillRect(bx + 10, top + 30, unit - 20, bh - 30);
-      ctx.fillRect(bx + unit * 0.55, top + 10, unit * 0.25, 30);
-      ctx.fillRect(bx + unit * 0.65, top - 5, unit * 0.22, 22);
-      ctx.fillStyle = '#333';
-      ctx.fillRect(bx + 20, GROUND_Y - 18, 18, 18);
-      ctx.fillRect(bx + unit - 38, GROUND_Y - 18, 18, 18);
+      const body = i % 2 === 0 ? '#6a6a6a' : '#747474';
+      const dark = '#4f4f4f';
+      const light = '#8f8f8f';
+      // tail
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.moveTo(bx + 20, top + bh * 0.55);
+      ctx.lineTo(bx - 30, top + bh * 0.45);
+      ctx.lineTo(bx - 10, top + bh * 0.72);
+      ctx.closePath(); ctx.fill();
+      // body
+      ctx.fillStyle = body;
+      ctx.fillRect(bx + 20, top + bh * 0.38, bw - 40, bh * 0.48);
+      // back ridge
+      ctx.fillStyle = light;
+      for (let s = 0; s < 5; s++) ctx.fillRect(bx + 40 + s * (bw * 0.12), top + bh * 0.32, bw * 0.06, bh * 0.08);
+      // neck + head (facing left)
+      ctx.fillStyle = body;
+      ctx.fillRect(bx + 20, top + bh * 0.18, bw * 0.22, bh * 0.28);
+      ctx.fillRect(bx - 5, top + bh * 0.05, bw * 0.32, bh * 0.22);
+      ctx.fillStyle = dark;
+      ctx.fillRect(bx - 18, top + bh * 0.12, 20, bh * 0.08);
+      // eye
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(bx + 2, top + bh * 0.11, 10, 10);
+      ctx.fillStyle = dark; ctx.fillRect(bx + 4, top + bh * 0.13, 5, 5);
+      // legs
+      ctx.fillStyle = dark;
+      const legW = Math.max(18, bw * 0.12);
+      ctx.fillRect(bx + bw * 0.25, GROUND_Y - bh * 0.22, legW, bh * 0.22);
+      ctx.fillRect(bx + bw * 0.62, GROUND_Y - bh * 0.22, legW, bh * 0.22);
       // dust
-      ctx.fillStyle = 'rgba(160,160,160,0.35)';
-      ctx.fillRect(bx - 10, GROUND_Y - 8 - (i%2)*6, 20, 6);
+      ctx.fillStyle = 'rgba(170,170,170,0.35)';
+      ctx.fillRect(bx - 20, GROUND_Y - 10 - (i%2)*8, 28, 8);
+      ctx.fillRect(bx + 10, GROUND_Y - 6 - ((i+1)%2)*6, 22, 6);
     }
   }
 
