@@ -217,7 +217,7 @@
       shootCooldown: 0,
       nextHostileX: 900,
       pitSpawnX: 600,
-      herd: { phase: 'idle', timer: rnd(12, 22), x: 0, speed: 0, width: 0, height: 0, warned: 0, members: [] },
+      herd: { phase: 'idle', timer: (settings.difficulty === 'hard' ? rnd(10,18) : settings.difficulty === 'normal' ? rnd(12,20) : rnd(15,24)), x: 0, speed: 0, width: 0, height: 0, warned: 0, members: [] },
       pendingHerdTimer: 0,
       message: '',
       messageTimer: 0,
@@ -408,18 +408,25 @@
     return false;
   }
 
+  function getHostileParams() {
+    if (settings.difficulty === 'hard') return { max: 4, hpMin: 3, hpMax: 6, shootBase: [0.5, 1.6], shootVar: [0.3, 1.0], move: [0.7, 1.8], interval: [450, 750], roar: 0.55 };
+    if (settings.difficulty === 'normal') return { max: 3, hpMin: 2, hpMax: 5, shootBase: [0.6, 1.9], shootVar: [0.35, 1.2], move: [0.6, 1.6], interval: [550, 900], roar: 0.45 };
+    return { max: 2, hpMin: 1, hpMax: 4, shootBase: [0.7, 2.2], shootVar: [0.4, 1.4], move: [0.5, 1.5], interval: [700, 1100], roar: 0.35 };
+  }
+
   function spawnHostileAt(worldX) {
-    if (game.hostiles.length >= (settings.difficulty === 'hard' ? 3 : 2)) return;
+    const hp = getHostileParams();
+    if (game.hostiles.length >= hp.max) return;
     let wx = Math.max(80, worldX);
     if (obstacleOverlapsPit(wx - 20, 60)) wx += 120;
-    const hp = Math.floor(rnd(1, 4.99)); // 1-4 random
+    const life = Math.floor(rnd(hp.hpMin, hp.hpMax + 0.99));
     game.hostiles.push({
-      worldX: wx, y: 0, w: DINO_W, h: DINO_H, hp: hp, maxHp: hp,
+      worldX: wx, y: 0, w: DINO_W, h: DINO_H, hp: life, maxHp: life,
       facing: -1,
-      shootCd: rnd(0.6, 1.6),
-      shootBase: rnd(0.7, 2.2),
-      shootVar: rnd(0.4, 1.4),
-      moveSpeed: rnd(0.5, 1.5),
+      shootCd: rnd(0.5, 1.4),
+      shootBase: rnd(hp.shootBase[0], hp.shootBase[1]),
+      shootVar: rnd(hp.shootVar[0], hp.shootVar[1]),
+      moveSpeed: rnd(hp.move[0], hp.move[1]),
       hitFlash: 0, dead: false
     });
   }
@@ -489,16 +496,16 @@
     game.herd.phase = 'active';
     // variable speed each time, mostly slow
     game.herd.speed = pickHerdSpeed();
-    game.herd.width = rnd(1300, 2000);
+    game.herd.width = rnd(1600, 2400);
     game.herd.height = 320;
     game.herd.x = game.cameraX + W + 120;
     game.herd.timer = 0;
     // randomize members with overlapping positions
-    const count = 6 + Math.floor(rnd(0, 3)); // 6-8
+    const count = 14 + Math.floor(rnd(0, 7)); // 14-20
     game.herd.members = [];
     for (let i = 0; i < count; i++) {
       game.herd.members.push({
-        ox: rnd(0, game.herd.width - 220),
+        ox: rnd(0, game.herd.width - 260),
         oy: rnd(0, 8),
         scale: rnd(4.0, 6.5),
         shade: ['#666', '#707070', '#787878', '#5f5f5f'][Math.floor(rnd(0, 4))],
@@ -510,9 +517,16 @@
     game.shakeTime = 999;
     game.shakeMag = 8;
   }
+  function getHerdIdleRange() {
+    if (settings.difficulty === 'hard') return [12, 24];
+    if (settings.difficulty === 'normal') return [15, 29];
+    return [18, 35];
+  }
+
   function endHerd() {
     game.herd.phase = 'idle';
-    game.herd.timer = rnd(18, 35);
+    const r = getHerdIdleRange();
+    game.herd.timer = rnd(r[0], r[1]);
     game.shakeTime = 0;
     game.shakeMag = 0;
   }
@@ -626,7 +640,8 @@
     if (game.maxWorldX + 350 >= game.nextHostileX) {
       const spawnX = Math.max(game.nextHostileX, game.cameraX + W + 60);
       spawnHostileAt(spawnX);
-      game.nextHostileX += rnd(700, 1100);
+      const hp = getHostileParams();
+      game.nextHostileX += rnd(hp.interval[0], hp.interval[1]);
     }
     // herd timer
     updateHerd(dt);
@@ -774,7 +789,13 @@
             h.dead = true; h._remove = true;
             spawnPixelCollapse(h.worldX, GROUND_Y - h.y, h.w, h.h, FG);
             game.score += 50;
-            setMessage('消灭敌对恐龙！', 1.0);
+            if (Math.random() < getHostileParams().roar) {
+              spawnRoarEffect(h.worldX, GROUND_Y - h.y);
+              setMessage('敌对恐龙发出怒吼！巨型恐龙群即将来袭！', 2.0);
+              if (game.pendingHerdTimer <= 0 && game.herd.phase === 'idle') game.pendingHerdTimer = 2.0;
+            } else {
+              setMessage('消灭敌对恐龙！', 1.0);
+            }
           }
           break;
         }
@@ -1080,11 +1101,27 @@
     if (!game || !game.particles || !game.particles.length) return;
     for (const p of game.particles) {
       const sx = (game.mode === 'explore') ? (p.worldX - game.cameraX) : (p.worldX - (game.cameraX || 0));
-      if (sx < -30 || sx > W + 30) continue;
+      if (sx < -60 || sx > W + 60) continue;
       const a = clamp(p.life / p.maxLife, 0, 1);
-      ctx.globalAlpha = a;
-      ctx.fillStyle = p.color;
-      ctx.fillRect(sx, p.y, p.w, p.h);
+      if (p.type === 'roar') {
+        ctx.save();
+        ctx.globalAlpha = a * 0.9;
+        ctx.strokeStyle = FG;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(sx, p.y, p.r, -0.7, 0.7); ctx.stroke();
+        ctx.beginPath(); ctx.arc(sx, p.y, p.r + 12, -0.6, 0.6); ctx.stroke();
+        ctx.beginPath(); ctx.arc(sx, p.y, p.r + 24, -0.5, 0.5); ctx.stroke();
+        ctx.globalAlpha = a;
+        ctx.fillStyle = FG;
+        ctx.font = 'bold 18px "Courier New", monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('吼!', sx, p.y - 8);
+        ctx.restore();
+      } else {
+        ctx.globalAlpha = a;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(sx, p.y, p.w, p.h);
+      }
     }
     ctx.globalAlpha = 1;
   }
