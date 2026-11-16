@@ -226,16 +226,16 @@
   }
 
   // ==================== 跳跃力度缩放 ====================
-  // 高速时按比例放大跳跃；低速时额外提升跳跃力度与滞空时间，确保能跨过较宽障碍
+  // 高速时按比例放大跳跃；低速时降低起跳速度与重力以延长滞空但保持跳跃高度，便于越过宽障碍
   function computeJumpParams() {
     const cfg = DIFFICULTIES[settings.difficulty];
     const speedRatio = game.speed / cfg.baseSpeed;
-    const lift = Math.max(1.0, Math.min(1.6, speedRatio));
-    let hang = lift;
-    if (speedRatio < 1.0) {
-      const boost = Math.min(2.0, 1.0 / Math.max(speedRatio, 0.35));
-      hang = lift / boost; // 重力倍率更小 -> 滞空更久，低速也能跳过宽障碍
+    if (speedRatio >= 1.0) {
+      const lift = Math.min(1.6, speedRatio);
+      return { lift: lift, hang: lift };
     }
+    const lift = Math.max(0.55, speedRatio);
+    const hang = lift * lift; // 保持近似跳跃高度，滞空时间 = 基础 / lift
     return { lift: lift, hang: hang };
   }
 
