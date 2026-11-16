@@ -459,8 +459,8 @@
     game.herd.phase = 'warning';
     game.herd.timer = rnd(1.6, 2.4);
     setMessage('巨型恐龙群接近！快找坑躲避！', 2.0);
-    game.shakeTime = 0.5;
-    game.shakeMag = 3;
+    game.shakeTime = 999;
+    game.shakeMag = 3.5;
   }
   function pickHerdSpeed() {
     // mostly slow, sometimes faster
@@ -492,12 +492,14 @@
     }
     // sort by ox for depth-ish layering
     game.herd.members.sort((a, b) => a.ox - b.ox);
-    game.shakeTime = 0.9;
+    game.shakeTime = 999;
     game.shakeMag = 8;
   }
   function endHerd() {
     game.herd.phase = 'idle';
     game.herd.timer = rnd(18, 35);
+    game.shakeTime = 0;
+    game.shakeMag = 0;
   }
 
   // ---------- Update ----------
@@ -783,15 +785,15 @@
       h.timer -= dt;
       if (h.timer <= 0) startHerdWarning();
     } else if (h.phase === 'warning') {
+      game.shakeTime = 999;
+      game.shakeMag = 3.5;
       h.timer -= dt;
       if (h.timer <= 0) startHerdActive();
     } else if (h.phase === 'active') {
       h.x -= h.speed * dt * 60; // move left in world
-      // subtle ongoing rumble while herd on screen
-      if (h.x < game.cameraX + W && h.x + h.width > game.cameraX) {
-        game.shakeTime = Math.max(game.shakeTime, 0.05);
-        game.shakeMag = Math.max(game.shakeMag || 0, 2.5);
-      }
+      // keep shaking while herd event is active
+      game.shakeTime = 999;
+      game.shakeMag = Math.max(game.shakeMag || 0, 8);
       if (h.x + h.width < game.cameraX - 120) endHerd();
     }
   }
@@ -831,7 +833,7 @@
 
   function update(dt) {
     if (!game) return;
-    if (game.shakeTime > 0) game.shakeTime = Math.max(0, game.shakeTime - dt);
+    if (game.shakeTime > 0 && game.shakeTime < 900) game.shakeTime = Math.max(0, game.shakeTime - dt);
     // let death/explosion particles animate on end screen
     if (game.particles && game.particles.length) updateParticles(dt, dt * 60);
     if (!game.started || game.over || game.paused) return;
