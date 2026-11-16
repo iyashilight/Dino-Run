@@ -218,6 +218,7 @@
       nextHostileX: 900,
       pitSpawnX: 600,
       herd: { phase: 'idle', timer: rnd(12, 22), x: 0, speed: 0, width: 0, height: 0, warned: 0, members: [] },
+      pendingHerdTimer: 0,
       message: '',
       messageTimer: 0,
       shakeTime: 0,
@@ -381,12 +382,21 @@
     }
     return null;
   }
+  function getPitAtX(x) {
+    for (const p of game.pits) {
+      if (x > p.worldX + 2 && x < p.worldX + p.w - 2) return p;
+    }
+    return null;
+  }
+
   function getPitUnderPlayer() {
     const px = game.playerWorldX;
     const footX1 = px + 10, footX2 = px + 34;
+    const centerX = px + 22;
     for (const p of game.pits) {
-      // while low/in pit, foot overlap keeps player in pit so they must jump to exit
-      if (footX2 > p.worldX + 4 && footX1 < p.worldX + p.w - 4) return p;
+      // stable detection to avoid edge flicker
+      if (footX2 > p.worldX + 3 && footX1 < p.worldX + p.w - 3) return p;
+      if (centerX > p.worldX + 6 && centerX < p.worldX + p.w - 6) return p;
     }
     return null;
   }
@@ -440,6 +450,7 @@
         if (Math.random() < 0.15) continue;
         const px = w / cols, py = h / rows;
         game.particles.push({
+          type: 'pixel',
           worldX: worldX + c * px,
           y: baseY - h + r * py,
           vx: rnd(-4.5, 4.5),
@@ -453,6 +464,10 @@
         });
       }
     }
+  }
+
+  function spawnRoarEffect(worldX, baseY) {
+    game.particles.push({ type: 'roar', worldX: worldX + 20, y: baseY - 36, life: 1.2, maxLife: 1.2, r: 8 });
   }
 
   function startHerdWarning() {
@@ -549,6 +564,10 @@
     if (game.hurtTimer > 0) game.hurtTimer = Math.max(0, game.hurtTimer - dt);
     if (game.messageTimer > 0) game.messageTimer = Math.max(0, game.messageTimer - dt);
     if (game.shootCooldown > 0) game.shootCooldown = Math.max(0, game.shootCooldown - dt);
+    if (game.pendingHerdTimer > 0) {
+      game.pendingHerdTimer = Math.max(0, game.pendingHerdTimer - dt);
+      if (game.pendingHerdTimer === 0 && game.herd.phase === 'idle') startHerdWarning();
+    }
 
     // horizontal movement
     let dir = 0;
@@ -557,18 +576,22 @@
     if (dir !== 0) dino.facing = dir;
     let moveV = dir * moveSpeedBase;
     // pit slowdown / fall-in handling
-    const pitUnder = getPitUnderPlayer();
+    let pitUnder = getPitUnderPlayer();
+    // if airborne high above ground, don't treat as inside pit for floor
+    if (pitUnder && dino.y > 1) pitUnder = null;
     const groundBase = pitUnder ? -pitUnder.d : 0;
     const inPitBottom = !!(pitUnder && dino.y <= groundBase + 2);
     if (inPitBottom) moveV *= 0.45; // hard to move inside
     const prevX = game.playerWorldX;
     game.playerWorldX += moveV * f;
     // if trapped in pit bottom, cannot walk out - must jump up first
-    if (inPitBottom && pitUnder && dino.y < 0) {
-      const minX = pitUnder.worldX - 2;
-      const maxX = pitUnder.worldX + pitUnder.w - DINO_W + 2;
+    const pitCheck = getPitAtX(game.playerWorldX + 22);
+    if (inPitBottom && pitCheck && dino.y < 0) {
+      const minX = pitCheck.worldX - 4;
+      const maxX = pitCheck.worldX + pitCheck.w - DINO_W + 4;
       game.playerWorldX = clamp(game.playerWorldX, minX, maxX);
     }
+    // prevent walking into pit while on ground level (must jump over or fall in intentionally?) - keep simple: allow fall
     if (game.playerWorldX < 40) game.playerWorldX = 40;
     if (game.playerWorldX > game.maxWorldX) game.maxWorldX = game.playerWorldX;
     game.score = Math.max(0, game.maxWorldX - 200);
@@ -576,7 +599,7 @@
     // camera
     game.cameraX = Math.max(0, game.playerWorldX - EXPLORE_SCREEN_X);
 
-    // re-evaluate pit after horizontal move (if jumped above ground, allow leaving pit)
+    // re-evaluate pit after horizontal move
     let pitUnder2 = getPitUnderPlayer();
     if (pitUnder2 && dino.y > 0) {
       // airborne above ground level - treat as outside pit for landing
@@ -686,11 +709,18 @@
       const dist = game.playerWorldX - h.worldX;
       const ad = Math.abs(dist);
       const ms = (h.moveSpeed || 1);
+      let nextX = h.worldX;
       // walk toward player (can come in from right side as player explores)
-      if (ad > 260) h.worldX += Math.sign(dist) * 1.2 * ms * f;
-      else if (ad < 150) h.worldX -= Math.sign(dist || 1) * 0.8 * ms * f;
-      // keep out of pits
-      if (obstacleOverlapsPit(h.worldX, h.w)) h.worldX += (h.facing > 0 ? -1 : 1) * 60;
+      if (ad > 260) nextX += Math.sign(dist) * 1.2 * ms * f;
+      else if (ad < 150) nextX -= Math.sign(dist || 1) * 0.8 * ms * f;
+      // avoid pits smoothly instead of teleport/bounce
+      if (obstacleOverlapsPit(nextX, h.w)) {
+        // try stepping back; if still blocked, hold position
+        const back = nextX - Math.sign(dist || 1) * 2.5 * ms * f;
+        if (!obstacleOverlapsPit(back, h.w)) nextX = back;
+        else nextX = h.worldX;
+      }
+      h.worldX = nextX;
       // shoot
       h.shootCd -= dt;
       if (h.shootCd <= 0 && ad < 520) {
@@ -765,11 +795,19 @@
   function updateParticles(dt, f) {
     for (const p of game.particles) {
       p.life -= dt;
-      p.vy += 0.45 * f;
-      p.worldX += p.vx * f;
-      p.y += p.vy * f;
+      if (p.type === 'roar') {
+        p.r += 40 * dt;
+      } else {
+        p.vy += 0.45 * f;
+        p.worldX += p.vx * f;
+        p.y += p.vy * f;
+      }
     }
-    game.particles = game.particles.filter(p => p.life > 0 && p.y < H + 40);
+    game.particles = game.particles.filter(p => {
+      if (p.life <= 0) return false;
+      if (p.type === 'roar') return true;
+      return p.y < H + 40;
+    });
   }
 
   function isPlayerSheltered() {
