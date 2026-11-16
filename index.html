@@ -86,7 +86,7 @@
 
   <div class="hint">
     <span class="kbd">空格</span> / <span class="kbd">↑</span> / 点击画面 —— 跳跃（无敌模式下按住可一直飞）<br>
-    <span class="kbd">Shift</span> 加速 · <span class="kbd">Ctrl</span> 减速 · <span class="kbd">CapsLock</span> 快速下落
+    <span class="kbd">Shift</span> 加速 · <span class="kbd">Ctrl</span> 减速 · <span class="kbd">CapsLock</span> 快速下落 · <span class="kbd">P</span> / <span class="kbd">Esc</span> 暂停
   </div>
 </div>
 
@@ -180,6 +180,7 @@
     const cfg = DIFFICULTIES[settings.difficulty];
     game = {
       over: false,
+      paused: false,
       speed: cfg.baseSpeed,
       score: 0,
       frame: 0,
@@ -210,12 +211,11 @@
   }
 
   // ==================== 跳跃力度缩放 ====================
-  // 让跳跃的初速度与重力同时按速度比例缩放：
-  //   滞空时间不变，跳跃高度与水平跨度随速度增大，手感与画面速度匹配
+  // 高速时按比例放大跳跃，低速时不缩小（保持基础跳跃力度），避免慢速下跳不过障碍物
   function computeJumpRatio() {
     const cfg = DIFFICULTIES[settings.difficulty];
     const r = game.speed / cfg.baseSpeed;
-    return Math.max(0.75, Math.min(1.6, r));
+    return Math.max(1.0, Math.min(1.6, r));
   }
 
   // ==================== 碰撞盒 ====================
@@ -294,7 +294,7 @@
 
   // ==================== 更新 ====================
   function update(dt) {
-    if (game.over) return;
+    if (game.over || game.paused) return;
 
     const f = dt * 60;
     const cfg = DIFFICULTIES[settings.difficulty];
@@ -590,6 +590,21 @@
     }
   }
 
+  function drawPaused() {
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = FG;
+    ctx.font = 'bold 30px "Courier New", monospace';
+    ctx.fillText('已 暂 停', W / 2, H / 2 - 12);
+    ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.fillStyle = '#8a8a8a';
+    ctx.fillText('按 P 或 Esc 继续', W / 2, H / 2 + 28);
+    ctx.restore();
+  }
+
   function render() {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, W, H);
@@ -602,11 +617,21 @@
     drawScore();
 
     if (game.over) drawGameOver();
+    else if (game.paused) drawPaused();
   }
 
   // ==================== 输入 ====================
+  function togglePause() {
+    if (game.over) return;
+    game.paused = !game.paused;
+    if (game.paused) {
+      keys.space = false; keys.shift = false; keys.ctrl = false; keys.caps = false;
+    }
+  }
+
   function jumpPress() {
     if (game.over) { restart(); return; }
+    if (game.paused) return;
     if (settings.invincible) return;
     if (!dino.jumping) {
       dino.jumping = true;
@@ -616,6 +641,12 @@
   }
 
   window.addEventListener('keydown', function (e) {
+    if (e.code === 'KeyP' || e.code === 'Escape') {
+      e.preventDefault();
+      togglePause();
+      return;
+    }
+    if (game.paused) return;
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
       e.preventDefault();
       if (game.over) { restart(); return; }
@@ -641,6 +672,7 @@
   canvas.addEventListener('pointerdown', function (e) {
     e.preventDefault();
     if (game.over) { restart(); return; }
+    if (game.paused) { togglePause(); return; }
     keys.space = true;
     jumpPress();
   }, { passive: false });
