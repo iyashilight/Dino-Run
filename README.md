@@ -1,5 +1,7 @@
 # 恐龙快跑 · Dino Run
 
+> **中文** | [English](README.en.md)
+
 一个纯前端的像素风恐龙跑酷小游戏，灵感来自 Chrome 离线小恐龙。
 
 **单个 HTML 文件**即可运行，零依赖、零构建，可直接部署到 GitHub Pages。
