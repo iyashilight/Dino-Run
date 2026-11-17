@@ -1,0 +1,11 @@
+# OS / 编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# 本地临时文件
+*.local
+*.log
